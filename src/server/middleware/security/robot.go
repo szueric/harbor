@@ -21,9 +21,8 @@ import (
 	"github.com/goharbor/harbor/src/common"
 	"github.com/goharbor/harbor/src/common/security"
 	robotCtx "github.com/goharbor/harbor/src/common/security/robot"
-	"github.com/goharbor/harbor/src/core/config"
+	ctl_robot "github.com/goharbor/harbor/src/controller/robot"
 	"github.com/goharbor/harbor/src/lib/log"
-	pkgrobot "github.com/goharbor/harbor/src/pkg/robot"
 	pkg_token "github.com/goharbor/harbor/src/pkg/token"
 	robot_claim "github.com/goharbor/harbor/src/pkg/token/claims/robot"
 )
@@ -40,15 +39,19 @@ func (r *robot) Generate(req *http.Request) security.Context {
 		return nil
 	}
 	rClaims := &robot_claim.Claim{}
-	opt := pkg_token.DefaultTokenOptions()
-	rtk, err := pkg_token.Parse(opt, robotTk, rClaims)
+	defaultOpt := pkg_token.DefaultTokenOptions()
+	if defaultOpt == nil {
+		log.Error("failed to get default token options")
+		return nil
+	}
+	rtk, err := pkg_token.Parse(defaultOpt, robotTk, rClaims)
 	if err != nil {
-		log.Errorf("failed to decrypt robot token: %v", err)
+		log.Debugf("failed to decrypt robot token of v1 robot: %s, as: %v", robotName, err)
 		return nil
 	}
 	// Do authn for robot account, as Harbor only stores the token ID, just validate the ID and disable.
-	ctr := pkgrobot.RobotCtr
-	robot, err := ctr.GetRobotAccount(rtk.Claims.(*robot_claim.Claim).TokenID)
+	ctr := ctl_robot.Ctl
+	robot, err := ctr.Get(req.Context(), rtk.Claims.(*robot_claim.Claim).TokenID, nil)
 	if err != nil {
 		log.Errorf("failed to get robot %s: %v", robotName, err)
 		return nil
@@ -66,5 +69,6 @@ func (r *robot) Generate(req *http.Request) security.Context {
 		return nil
 	}
 	log.Debugf("a robot security context generated for request %s %s", req.Method, req.URL.Path)
-	return robotCtx.NewSecurityContext(robot, config.GlobalProjectMgr, rtk.Claims.(*robot_claim.Claim).Access)
+
+	return robotCtx.NewSecurityContext(&robot.Robot, false, rtk.Claims.(*robot_claim.Claim).Access)
 }

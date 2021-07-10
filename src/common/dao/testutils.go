@@ -16,10 +16,10 @@ package dao
 
 import (
 	"fmt"
+	"github.com/goharbor/harbor/src/common/models"
 	"os"
 	"strconv"
 
-	"github.com/goharbor/harbor/src/common/models"
 	"github.com/goharbor/harbor/src/lib/log"
 )
 
@@ -61,11 +61,13 @@ func PrepareTestForPostgresSQL() {
 	database := &models.Database{
 		Type: "postgresql",
 		PostGreSQL: &models.PostGreSQL{
-			Host:     dbHost,
-			Port:     dbPort,
-			Username: dbUser,
-			Password: dbPassword,
-			Database: dbDatabase,
+			Host:         dbHost,
+			Port:         dbPort,
+			Username:     dbUser,
+			Password:     dbPassword,
+			Database:     dbDatabase,
+			MaxIdleConns: 50,
+			MaxOpenConns: 100,
 		},
 	}
 
@@ -94,7 +96,7 @@ func initDatabaseForTest(db *models.Database) {
 	}
 
 	if alias != "default" {
-		if err = globalOrm.Using(alias); err != nil {
+		if err = GetOrmer().Using(alias); err != nil {
 			log.Fatalf("failed to create new orm: %v", err)
 		}
 	}
@@ -131,6 +133,12 @@ func ExecuteBatchSQL(sqls []string) {
 			fmt.Printf("failed to execute batch sql, sql:%v, error: %v", sql, err)
 		}
 	}
+}
+
+// CleanUser - Clean this user information from DB, this is a shortcut for UT.
+func CleanUser(id int64) error {
+	_, err := GetOrmer().QueryTable(&models.User{}).Filter("UserID", id).Delete()
+	return err
 }
 
 // ArrayEqual ...

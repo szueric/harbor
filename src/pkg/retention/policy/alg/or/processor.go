@@ -15,14 +15,15 @@
 package or
 
 import (
+	"context"
 	"github.com/goharbor/harbor/src/lib/selector"
 	"sync"
 
+	"github.com/goharbor/harbor/src/lib/errors"
 	"github.com/goharbor/harbor/src/lib/log"
 	"github.com/goharbor/harbor/src/pkg/retention/policy/action"
 	"github.com/goharbor/harbor/src/pkg/retention/policy/alg"
 	"github.com/goharbor/harbor/src/pkg/retention/policy/rule"
-	"github.com/pkg/errors"
 )
 
 // processor to handle the rules with OR mapping ways
@@ -59,7 +60,7 @@ func New(parameters []*alg.Parameter) alg.Processor {
 }
 
 // Process the candidates with the rules
-func (p *processor) Process(artifacts []*selector.Candidate) ([]*selector.Result, error) {
+func (p *processor) Process(ctx context.Context, artifacts []*selector.Candidate) ([]*selector.Result, error) {
 	if len(artifacts) == 0 {
 		log.Debug("no artifacts to retention")
 		return make([]*selector.Result, 0), nil
@@ -181,7 +182,7 @@ func (p *processor) Process(artifacts []*selector.Candidate) ([]*selector.Result
 		cl := hash.toList()
 
 		if pf, ok := p.performers[act]; ok {
-			if theRes, err := pf.Perform(cl); err != nil {
+			if theRes, err := pf.Perform(ctx, cl); err != nil {
 				attachedErr = err
 			} else {
 				results = append(results, theRes...)

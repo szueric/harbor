@@ -16,13 +16,16 @@ package http
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"io"
 	"io/ioutil"
+	"net"
 	"net/http"
 	"net/url"
 	"reflect"
+	"time"
 
 	"github.com/goharbor/harbor/src/common/http/modifier"
 	"github.com/goharbor/harbor/src/lib"
@@ -41,8 +44,8 @@ var (
 )
 
 func init() {
-	secureHTTPTransport = http.DefaultTransport.(*http.Transport).Clone()
-	insecureHTTPTransport = http.DefaultTransport.(*http.Transport).Clone()
+	secureHTTPTransport = newDefaultTransport()
+	insecureHTTPTransport = newDefaultTransport()
 	insecureHTTPTransport.TLSClientConfig.InsecureSkipVerify = true
 
 	if InternalTLSEnabled() {
@@ -54,11 +57,34 @@ func init() {
 	}
 }
 
+// Use this instead of Default Transport in library because it sets ForceAttemptHTTP2 to true
+// And that options introduced in go 1.13 will cause the https requests hang forever in replication environment
+func newDefaultTransport() *http.Transport {
+	return &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+			DualStack: true,
+		}).DialContext,
+		TLSClientConfig:       &tls.Config{},
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+}
+
 // Client is a util for common HTTP operations, such Get, Head, Post, Put and Delete.
 // Use Do instead if  those methods can not meet your requirement
 type Client struct {
 	modifiers []modifier.Modifier
 	client    *http.Client
+}
+
+// GetClient returns the http.Client
+func (c *Client) GetClient() *http.Client {
+	return c.client
 }
 
 // GetHTTPTransport returns HttpTransport based on insecure configuration

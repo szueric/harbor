@@ -17,3 +17,35 @@ Documentation  This resource provides any keywords related to the Harbor private
 Resource  ../../resources/Util.robot
 
 *** Keywords ***
+Go Into Artifact
+    [Arguments]  ${tag}
+    Retry Wait Until Page Not Contains Element  ${artifact_list_spinner}
+    Retry Element Click   xpath=//clr-dg-row[contains(.,'${tag}')]//a[contains(.,'sha256')]
+    Retry Wait Until Page Contains Element   ${artifact_tag_component}
+    Retry Wait Until Page Not Contains Element  ${artifact_list_spinner}
+
+Should Contain Tag
+    [Arguments]  ${tag}
+    Retry Wait Until Page Contains Element   xpath=//artifact-tag//clr-dg-row//clr-dg-cell[contains(.,'${tag}')]
+
+Should Not Contain Tag
+    [Arguments]  ${tag}
+    Retry Wait Until Page Not Contains Element   xpath=//artifact-tag//clr-dg-row//clr-dg-cell[contains(.,'${tag}')]
+
+Add A New Tag
+    [Arguments]  ${tag}
+    Retry Double Keywords When Error  Retry Element Click   ${add_tag_button}  Retry Wait Element  ${tag_name_xpath}
+    Retry Text Input   ${tag_name_xpath}   ${tag}
+    Retry Double Keywords When Error  Retry Element Click   ${add_ok_button}  Should Contain Tag  ${tag}
+
+Delete A Tag
+    [Arguments]  ${tag}
+    Retry Element Click   xpath=//clr-dg-row[contains(.,'${tag}')]//div[contains(@class,'clr-checkbox-wrapper')]//label[contains(@class,'clr-control-label')]
+    Retry Double Keywords When Error  Retry Element Click    ${delete_tag_button}  Retry Wait Until Page Contains Element  ${dialog_delete_button}
+    Retry Double Keywords When Error  Retry Element Click  ${dialog_delete_button}  Should Not Contain Tag  ${tag}
+
+Should Contain Artifact
+    Retry Wait Until Page Contains Element   xpath=//artifact-list-tab//clr-dg-row//a[contains(.,'sha256')]
+
+Should Not Contain Any Artifact
+    Retry Wait Until Page Not Contains Element   xpath=//artifact-list-tab//clr-dg-row

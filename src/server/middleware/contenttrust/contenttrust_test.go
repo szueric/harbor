@@ -16,13 +16,14 @@ package contenttrust
 
 import (
 	"fmt"
+	proModels "github.com/goharbor/harbor/src/pkg/project/models"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
-	"github.com/goharbor/harbor/src/common/models"
 	"github.com/goharbor/harbor/src/common/security"
 	"github.com/goharbor/harbor/src/controller/artifact"
+	"github.com/goharbor/harbor/src/controller/artifact/processor/image"
 	"github.com/goharbor/harbor/src/controller/project"
 	"github.com/goharbor/harbor/src/lib"
 	securitytesting "github.com/goharbor/harbor/src/testing/common/security"
@@ -42,7 +43,7 @@ type MiddlewareTestSuite struct {
 	projectController         *projecttesting.Controller
 
 	artifact *artifact.Artifact
-	project  *models.Project
+	project  *proModels.Project
 
 	isArtifactSigned func(req *http.Request, art lib.ArtifactInfo) (bool, error)
 	next             http.Handler
@@ -59,16 +60,16 @@ func (suite *MiddlewareTestSuite) SetupTest() {
 
 	suite.isArtifactSigned = isArtifactSigned
 	suite.artifact = &artifact.Artifact{}
-	suite.artifact.Type = artifact.ImageType
+	suite.artifact.Type = image.ArtifactTypeImage
 	suite.artifact.ProjectID = 1
 	suite.artifact.RepositoryName = "library/photon"
 	suite.artifact.Digest = "digest"
 
-	suite.project = &models.Project{
+	suite.project = &proModels.Project{
 		ProjectID: suite.artifact.ProjectID,
 		Name:      "library",
 		Metadata: map[string]string{
-			models.ProMetaEnableContentTrust: "true",
+			proModels.ProMetaEnableContentTrust: "true",
 		},
 	}
 
@@ -120,7 +121,7 @@ func (suite *MiddlewareTestSuite) TestGetProjectFailed() {
 
 func (suite *MiddlewareTestSuite) TestContentTrustDisabled() {
 	mock.OnAnything(suite.artifactController, "GetByReference").Return(suite.artifact, nil)
-	suite.project.Metadata[models.ProMetaEnableContentTrust] = "false"
+	suite.project.Metadata[proModels.ProMetaEnableContentTrust] = "false"
 	mock.OnAnything(suite.projectController, "GetByName").Return(suite.project, nil)
 
 	req := suite.makeRequest()
@@ -128,6 +129,14 @@ func (suite *MiddlewareTestSuite) TestContentTrustDisabled() {
 
 	Middleware()(suite.next).ServeHTTP(rr, req)
 	suite.Equal(rr.Code, http.StatusOK)
+}
+
+func (suite *MiddlewareTestSuite) TestNoneArtifact() {
+	req := httptest.NewRequest("GET", "/v1/library/photon/manifests/nonexist", nil)
+	rr := httptest.NewRecorder()
+
+	Middleware()(suite.next).ServeHTTP(rr, req)
+	suite.Equal(rr.Code, http.StatusNotFound)
 }
 
 func (suite *MiddlewareTestSuite) TestAuthenticatedUserPulling() {
@@ -150,7 +159,7 @@ func (suite *MiddlewareTestSuite) TestScannerPulling() {
 	mock.OnAnything(suite.artifactController, "GetByReference").Return(suite.artifact, nil)
 	mock.OnAnything(suite.projectController, "GetByName").Return(suite.project, nil)
 	securityCtx := &securitytesting.Context{}
-	mock.OnAnything(securityCtx, "Name").Return("robot")
+	mock.OnAnything(securityCtx, "Name").Return("v2token")
 	mock.OnAnything(securityCtx, "Can").Return(true, nil)
 	mock.OnAnything(securityCtx, "IsAuthenticated").Return(true)
 

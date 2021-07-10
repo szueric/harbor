@@ -15,18 +15,19 @@
 package quota
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 
+	cq "github.com/goharbor/harbor/src/controller/quota"
 	"github.com/goharbor/harbor/src/lib"
+	"github.com/goharbor/harbor/src/lib/errors"
+	lib_http "github.com/goharbor/harbor/src/lib/http"
 	"github.com/goharbor/harbor/src/lib/log"
 	"github.com/goharbor/harbor/src/pkg/notification"
 	"github.com/goharbor/harbor/src/pkg/notifier/event"
 	"github.com/goharbor/harbor/src/pkg/quota"
-	"github.com/goharbor/harbor/src/pkg/types"
-	serror "github.com/goharbor/harbor/src/server/error"
+	"github.com/goharbor/harbor/src/pkg/quota/types"
 	"github.com/goharbor/harbor/src/server/middleware"
 )
 
@@ -62,7 +63,7 @@ func RequestMiddleware(config RequestConfig, skippers ...middleware.Skipper) fun
 		logger := log.G(r.Context()).WithFields(log.Fields{"middleware": "quota", "action": "request", "url": r.URL.Path})
 
 		if config.ReferenceObject == nil || config.Resources == nil {
-			serror.SendError(w, fmt.Errorf("invald config the for middleware"))
+			lib_http.SendError(w, fmt.Errorf("invald config the for middleware"))
 			return
 		}
 
@@ -70,14 +71,14 @@ func RequestMiddleware(config RequestConfig, skippers ...middleware.Skipper) fun
 		if err != nil {
 			logger.Errorf("get reference object failed, error: %v", err)
 
-			serror.SendError(w, err)
+			lib_http.SendError(w, err)
 			return
 		}
 
 		enabled, err := quotaController.IsEnabled(r.Context(), reference, referenceID)
 		if err != nil {
 			logger.Errorf("check whether quota enabled for %s %s failed, error: %v", reference, referenceID, err)
-			serror.SendError(w, err)
+			lib_http.SendError(w, err)
 			return
 		}
 
@@ -92,7 +93,7 @@ func RequestMiddleware(config RequestConfig, skippers ...middleware.Skipper) fun
 		if err != nil {
 			logger.Errorf("get resources failed, error: %v", err)
 
-			serror.SendError(w, err)
+			lib_http.SendError(w, err)
 			return
 		}
 
@@ -133,7 +134,7 @@ func RequestMiddleware(config RequestConfig, skippers ...middleware.Skipper) fun
 				}
 
 				if len(resources) == 0 {
-					logger.Warningf("not warning resources found")
+					logger.Debug("not warning resources found")
 					return
 				}
 
@@ -167,7 +168,13 @@ func RequestMiddleware(config RequestConfig, skippers ...middleware.Skipper) fun
 			}
 
 			res.Reset()
-			serror.SendError(res, err)
+
+			var errs quota.Errors
+			if errors.As(err, &errs) {
+				lib_http.SendError(res, errors.DeniedError(nil).WithMessage(errs.Error()))
+			} else {
+				lib_http.SendError(res, err)
+			}
 		}
 
 	}, skippers...)
@@ -175,6 +182,9 @@ func RequestMiddleware(config RequestConfig, skippers ...middleware.Skipper) fun
 
 // RefreshConfig refresh quota usage middleware config
 type RefreshConfig struct {
+	// IgnoreLimitation allow quota usage exceed the limitation when it's true
+	IgnoreLimitation bool
+
 	// ReferenceObject returns reference object its quota usage will refresh by reference and reference id
 	ReferenceObject func(*http.Request) (reference string, referenceID string, err error)
 }
@@ -210,8 +220,14 @@ func RefreshMiddleware(config RefreshConfig, skipers ...middleware.Skipper) func
 			return nil
 		}
 
-		if err = quotaController.Refresh(r.Context(), reference, referenceID); err != nil {
+		if err = quotaController.Refresh(r.Context(), reference, referenceID, cq.IgnoreLimitation(config.IgnoreLimitation)); err != nil {
 			logger.Errorf("refresh quota for %s %s failed, error: %v", reference, referenceID, err)
+
+			var errs quota.Errors
+			if errors.As(err, &errs) {
+				return errors.DeniedError(nil).WithMessage(errs.Error())
+			}
+
 			return err
 		}
 

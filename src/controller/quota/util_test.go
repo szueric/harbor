@@ -16,16 +16,17 @@ package quota
 
 import (
 	"context"
+	proModels "github.com/goharbor/harbor/src/pkg/project/models"
 	"math/rand"
 	"testing"
 	"time"
 
-	"github.com/goharbor/harbor/src/common/models"
 	"github.com/goharbor/harbor/src/controller/project"
 	"github.com/goharbor/harbor/src/lib/orm"
+	"github.com/goharbor/harbor/src/lib/q"
 	"github.com/goharbor/harbor/src/pkg/quota"
 	"github.com/goharbor/harbor/src/pkg/quota/driver"
-	"github.com/goharbor/harbor/src/pkg/types"
+	"github.com/goharbor/harbor/src/pkg/quota/types"
 	projecttesting "github.com/goharbor/harbor/src/testing/controller/project"
 	ormtesting "github.com/goharbor/harbor/src/testing/lib/orm"
 	"github.com/goharbor/harbor/src/testing/mock"
@@ -75,21 +76,21 @@ func (suite *RefreshForProjectsTestSuite) TestRefreshForProjects() {
 	rand.Seed(time.Now().UnixNano())
 
 	startProjectID := rand.Int63()
-	var firstPageProjects, secondPageProjects []*models.Project
+	var firstPageProjects, secondPageProjects []*proModels.Project
 	for i := 0; i < 50; i++ {
-		firstPageProjects = append(firstPageProjects, &models.Project{
+		firstPageProjects = append(firstPageProjects, &proModels.Project{
 			ProjectID: startProjectID + int64(i),
 		})
 	}
 
 	for i := 0; i < 10; i++ {
-		secondPageProjects = append(secondPageProjects, &models.Project{
+		secondPageProjects = append(secondPageProjects, &proModels.Project{
 			ProjectID: startProjectID + 50 + int64(i),
 		})
 	}
 
 	page := 1
-	mock.OnAnything(suite.projectCtl, "List").Return(func(context.Context, *models.ProjectQueryParam, ...project.Option) []*models.Project {
+	mock.OnAnything(suite.projectCtl, "List").Return(func(context.Context, *q.Query, ...project.Option) []*proModels.Project {
 		defer func() {
 			page++
 		}()

@@ -16,11 +16,11 @@ import (
 
 	"github.com/goharbor/harbor/src/common"
 	commonhttp "github.com/goharbor/harbor/src/common/http"
+	rep_event "github.com/goharbor/harbor/src/controller/event/handler/replication/event"
 	"github.com/goharbor/harbor/src/controller/event/metadata"
 	hlog "github.com/goharbor/harbor/src/lib/log"
+	"github.com/goharbor/harbor/src/lib/orm"
 	n_event "github.com/goharbor/harbor/src/pkg/notifier/event"
-	"github.com/goharbor/harbor/src/replication"
-	rep_event "github.com/goharbor/harbor/src/replication/event"
 )
 
 const (
@@ -112,20 +112,20 @@ func modifyResponse(res *http.Response) error {
 		} else {
 			// Todo: it used as the replacement of webhook, will be removed when webhook to be introduced.
 			go func() {
-				if err := replication.EventHandler.Handle(e); err != nil {
+				if err := rep_event.Handle(orm.Context(), e); err != nil {
 					hlog.Errorf("failed to handle event: %v", err)
 				}
 			}()
 
 			// Trigger harbor webhook
-			if e != nil && e.Resource != nil && e.Resource.Metadata != nil && len(e.Resource.Metadata.Vtags) > 0 &&
+			if e != nil && e.Resource != nil && e.Resource.Metadata != nil && len(e.Resource.Metadata.Artifacts) > 0 &&
 				len(e.Resource.ExtendedInfo) > 0 {
 				event := &n_event.Event{}
 				metaData := &metadata.ChartUploadMetaData{
 					ChartMetaData: metadata.ChartMetaData{
 						ProjectName: e.Resource.ExtendedInfo["projectName"].(string),
 						ChartName:   e.Resource.ExtendedInfo["chartName"].(string),
-						Versions:    e.Resource.Metadata.Vtags,
+						Versions:    e.Resource.Metadata.Artifacts[0].Tags,
 						OccurAt:     time.Now(),
 						Operator:    e.Resource.ExtendedInfo["operator"].(string),
 					},

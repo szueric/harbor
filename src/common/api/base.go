@@ -15,6 +15,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,8 +25,8 @@ import (
 	"github.com/astaxie/beego"
 	"github.com/astaxie/beego/validation"
 	commonhttp "github.com/goharbor/harbor/src/common/http"
+	lib_http "github.com/goharbor/harbor/src/lib/http"
 	"github.com/goharbor/harbor/src/lib/log"
-	serror "github.com/goharbor/harbor/src/server/error"
 )
 
 const (
@@ -39,6 +40,11 @@ const (
 // BaseAPI wraps common methods for controllers to host API
 type BaseAPI struct {
 	beego.Controller
+}
+
+// Context returns the context.Context from http.Request
+func (b *BaseAPI) Context() context.Context {
+	return b.Ctx.Request.Context()
 }
 
 // GetStringFromPath gets the param from path and returns it as string
@@ -64,7 +70,7 @@ func (b *BaseAPI) Render() error {
 
 // RenderError provides shortcut to render http error
 func (b *BaseAPI) RenderError(code int, text string) {
-	serror.SendError(b.Ctx.ResponseWriter, &commonhttp.Error{
+	lib_http.SendError(b.Ctx.ResponseWriter, &commonhttp.Error{
 		Code:    code,
 		Message: text,
 	})
@@ -76,7 +82,7 @@ func (b *BaseAPI) DecodeJSONReq(v interface{}) error {
 	if err != nil {
 		log.Errorf("Error while decoding the json request, error: %v, %v",
 			err, string(b.Ctx.Input.CopyBody(1 << 32)[:]))
-		return errors.New("Invalid json request")
+		return errors.New("invalid json request")
 	}
 	return nil
 }
@@ -255,5 +261,5 @@ func (b *BaseAPI) SendStatusServiceUnavailableError(err error) {
 //	]
 // }
 func (b *BaseAPI) SendError(err error) {
-	serror.SendError(b.Ctx.ResponseWriter, err)
+	lib_http.SendError(b.Ctx.ResponseWriter, err)
 }

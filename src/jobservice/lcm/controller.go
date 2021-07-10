@@ -20,26 +20,19 @@ import (
 	"sync"
 	"time"
 
-	"github.com/goharbor/harbor/src/jobservice/errs"
-
-	"github.com/goharbor/harbor/src/jobservice/common/rds"
-
 	"github.com/goharbor/harbor/src/jobservice/common/list"
-
+	"github.com/goharbor/harbor/src/jobservice/common/rds"
 	"github.com/goharbor/harbor/src/jobservice/env"
+	"github.com/goharbor/harbor/src/jobservice/errs"
 	"github.com/goharbor/harbor/src/jobservice/job"
 	"github.com/goharbor/harbor/src/jobservice/logger"
+	"github.com/goharbor/harbor/src/lib/errors"
 	"github.com/gomodule/redigo/redis"
-	"github.com/pkg/errors"
 )
 
 const (
-	// Waiting a short while if any errors occurred
-	shortLoopInterval = 5 * time.Second
 	// Waiting for long while if no retrying elements found
 	longLoopInterval = 5 * time.Minute
-	// loopInterval is the interval for the loop of restoring dead status
-	loopInterval = 2 * time.Minute
 	// shortInterval is initial interval and be as based to give random buffer to loopInterval
 	shortInterval = 10
 )

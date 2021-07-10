@@ -17,6 +17,7 @@ package runner
 import (
 	"fmt"
 	"runtime"
+	"time"
 
 	"github.com/gocraft/work"
 	"github.com/goharbor/harbor/src/jobservice/env"
@@ -25,7 +26,12 @@ import (
 	"github.com/goharbor/harbor/src/jobservice/lcm"
 	"github.com/goharbor/harbor/src/jobservice/logger"
 	"github.com/goharbor/harbor/src/jobservice/period"
-	"github.com/pkg/errors"
+	"github.com/goharbor/harbor/src/lib/errors"
+	"github.com/goharbor/harbor/src/lib/metric"
+)
+
+const (
+	maxTrackRetries = 6
 )
 
 // RedisJob is a job wrapper to wrap the job.Interface to the style which can be recognized by the redis worker.
@@ -51,24 +57,44 @@ func (rj *RedisJob) Run(j *work.Job) (err error) {
 		execContext job.Context
 		tracker     job.Tracker
 	)
-
 	// Track the running job now
 	jID := j.ID
 
+	// used to instrument process time
+	now := time.Now()
 	// Check if the job is a periodic one as periodic job has its own ID format
 	if eID, yes := isPeriodicJobExecution(j); yes {
 		jID = eID
+
+		logger.Infof("Start to run periodical job execution: %s", eID)
 	}
 
-	if tracker, err = rj.ctl.Track(jID); err != nil {
-		// log error
+	// As the job stats may not be ready when job executing sometimes (corner case),
+	// the track call here may get NOT_FOUND error. For that case, let's do retry to recovery.
+	for retried := 0; retried <= maxTrackRetries; retried++ {
+		tracker, err = rj.ctl.Track(jID)
+		if err == nil {
+			break
+		}
+
+		if errs.IsObjectNotFoundError(err) {
+			if retried < maxTrackRetries {
+				// Still have chance to re-track the given job.
+				// Hold for a while and retry
+				b := backoff(retried)
+				logger.Errorf("Track job %s: stats may not have been ready yet, hold for %d ms and retry again", jID, b)
+				<-time.After(time.Duration(b) * time.Millisecond)
+				continue
+			} else {
+				// Exit and never try.
+				// Directly return without retry again as we have no way to restore the stats again.
+				j.Fails = 10000000000 // never retry
+			}
+		}
+
+		// Log error and exit
 		logger.Errorf("Job '%s:%s' exit with error: failed to get job tracker: %s", j.Name, j.ID, err)
 
-		// Pay attentions here, if the job stats is lost (NOTFOUND error returned),
-		// directly return without retry again as we have no way to restore the stats again.
-		if errs.IsObjectNotFoundError(err) {
-			j.Fails = 10000000000 // never retry
-		}
 		// ELSE:
 		// As tracker creation failed, there is no way to mark the job status change.
 		// Also a non nil error return consumes a fail. If all retries are failed here,
@@ -85,7 +111,8 @@ func (rj *RedisJob) Run(j *work.Job) (err error) {
 		if err != nil {
 			// log error
 			logger.Errorf("Job '%s:%s' exit with error: %s", j.Name, j.ID, err)
-
+			metric.JobserviceTotalTask.WithLabelValues(j.Name, "fail").Inc()
+			metric.JobservieTaskProcessTimeSummary.WithLabelValues(j.Name, "fail").Observe(time.Since(now).Seconds())
 			if er := tracker.Fail(); er != nil {
 				logger.Errorf("Error occurred when marking the status of job %s:%s to failure: %s", j.Name, j.ID, er)
 			}
@@ -100,11 +127,14 @@ func (rj *RedisJob) Run(j *work.Job) (err error) {
 		} else {
 			if latest == job.StoppedStatus {
 				// Logged
+				metric.JobserviceTotalTask.WithLabelValues(j.Name, "stop").Inc()
+				metric.JobservieTaskProcessTimeSummary.WithLabelValues(j.Name, "stop").Observe(time.Since(now).Seconds())
 				logger.Infof("Job %s:%s is stopped", j.Name, j.ID)
 				return
 			}
 		}
-
+		metric.JobserviceTotalTask.WithLabelValues(j.Name, "success").Inc()
+		metric.JobservieTaskProcessTimeSummary.WithLabelValues(j.Name, "success").Observe(time.Since(now).Seconds())
 		// Mark job status to success.
 		logger.Infof("Job '%s:%s' exit with success", j.Name, j.ID)
 		if er := tracker.Succeed(); er != nil {
@@ -212,6 +242,14 @@ func isPeriodicJobExecution(j *work.Job) (string, bool) {
 	return fmt.Sprintf("%s@%s", j.ID, epoch), ok
 }
 
-func bp(b bool) *bool {
-	return &b
+func backoff(x int) int {
+	// y=ax^2+bx+c
+	var a, b, c = -111, 666, 500
+
+	y := a*x*x + b*x + c
+	if y < 0 {
+		y = 0 - y
+	}
+
+	return y
 }

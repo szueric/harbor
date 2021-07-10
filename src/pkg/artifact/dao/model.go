@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/astaxie/beego/orm"
+	"github.com/goharbor/harbor/src/lib/q"
 )
 
 func init() {
@@ -36,6 +37,7 @@ type Artifact struct {
 	RepositoryName    string    `orm:"column(repository_name)"`
 	Digest            string    `orm:"column(digest)"`
 	Size              int64     `orm:"column(size)"`
+	Icon              string    `orm:"column(icon)"`
 	PushTime          time.Time `orm:"column(push_time)"`
 	PullTime          time.Time `orm:"column(pull_time)"`
 	ExtraAttrs        string    `orm:"column(extra_attrs)"`             // json string
@@ -45,6 +47,20 @@ type Artifact struct {
 // TableName for artifact
 func (a *Artifact) TableName() string {
 	return "artifact"
+}
+
+// GetDefaultSorts specifies the default sorts
+func (a *Artifact) GetDefaultSorts() []*q.Sort {
+	return []*q.Sort{
+		{
+			Key:  "PushTime",
+			DESC: true,
+		},
+		{
+			Key:  "ID",
+			DESC: true,
+		},
+	}
 }
 
 // ArtifactReference records the child artifact referenced by parent artifact

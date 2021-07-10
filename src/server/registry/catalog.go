@@ -17,9 +17,9 @@ package registry
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/goharbor/harbor/src/controller/repository"
 	"github.com/goharbor/harbor/src/lib/errors"
-	serror "github.com/goharbor/harbor/src/server/error"
+	lib_http "github.com/goharbor/harbor/src/lib/http"
+	"github.com/goharbor/harbor/src/pkg/repository"
 	"github.com/goharbor/harbor/src/server/registry/util"
 	"net/http"
 	"sort"
@@ -28,12 +28,12 @@ import (
 
 func newRepositoryHandler() http.Handler {
 	return &repositoryHandler{
-		repoCtl: repository.Ctl,
+		repoMgr: repository.Mgr,
 	}
 }
 
 type repositoryHandler struct {
-	repoCtl repository.Controller
+	repoMgr repository.Manager
 }
 
 func (r *repositoryHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
@@ -47,25 +47,24 @@ func (r *repositoryHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) 
 		maxEntries, err = strconv.Atoi(reqQ.Get("n"))
 		if err != nil || maxEntries < 0 {
 			err := errors.New(err).WithCode(errors.BadRequestCode).WithMessage("the N must be a positive int type")
-			serror.SendError(w, err)
+			lib_http.SendError(w, err)
 			return
 		}
 	}
 
 	repoNames := make([]string, 0)
-	// get all repositories
-	// ToDo filter out the untagged repos
-	repoRecords, err := r.repoCtl.List(req.Context(), nil)
+	// get all the non repositories
+	repoRecords, err := r.repoMgr.NonEmptyRepos(req.Context())
 	if err != nil {
-		serror.SendError(w, err)
+		lib_http.SendError(w, err)
 		return
 	}
 	if len(repoRecords) <= 0 {
 		r.sendResponse(w, req, repoNames)
 		return
 	}
-	for _, r := range repoRecords {
-		repoNames = append(repoNames, r.Name)
+	for _, repo := range repoRecords {
+		repoNames = append(repoNames, repo.Name)
 	}
 	sort.Strings(repoNames)
 	if !withN {
@@ -82,7 +81,7 @@ func (r *repositoryHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) 
 		lastEntryIndex := util.IndexString(repoNames, lastEntry)
 		if lastEntryIndex == -1 {
 			err := errors.New(nil).WithCode(errors.BadRequestCode).WithMessage(fmt.Sprintf("the last: %s should be a valid repository name.", lastEntry))
-			serror.SendError(w, err)
+			lib_http.SendError(w, err)
 			return
 		}
 		if lastEntryIndex+1+maxEntries > repoNamesLen {
@@ -107,7 +106,7 @@ func (r *repositoryHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) 
 	if repoNames[len(repoNames)-1] != resRepos[len(resRepos)-1] {
 		urlStr, err := util.SetLinkHeader(req.URL.String(), maxEntries, resRepos[len(resRepos)-1])
 		if err != nil {
-			serror.SendError(w, err)
+			lib_http.SendError(w, err)
 			return
 		}
 		w.Header().Set("Link", urlStr)
@@ -124,7 +123,7 @@ func (r *repositoryHandler) sendResponse(w http.ResponseWriter, req *http.Reques
 	if err := enc.Encode(catalogAPIResponse{
 		Repositories: repositoryNames,
 	}); err != nil {
-		serror.SendError(w, err)
+		lib_http.SendError(w, err)
 		return
 	}
 }

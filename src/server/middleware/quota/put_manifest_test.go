@@ -16,18 +16,20 @@ package quota
 
 import (
 	"context"
+	std_err "errors"
+	proModels "github.com/goharbor/harbor/src/pkg/project/models"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/docker/distribution/manifest/schema2"
-	commonmodels "github.com/goharbor/harbor/src/common/models"
 	"github.com/goharbor/harbor/src/lib/errors"
 	"github.com/goharbor/harbor/src/pkg/blob/models"
 	"github.com/goharbor/harbor/src/pkg/distribution"
 	"github.com/goharbor/harbor/src/pkg/notification"
 	"github.com/goharbor/harbor/src/pkg/quota"
-	"github.com/goharbor/harbor/src/pkg/types"
+	"github.com/goharbor/harbor/src/pkg/quota/types"
 	"github.com/goharbor/harbor/src/testing/mock"
 	distributiontesting "github.com/goharbor/harbor/src/testing/pkg/distribution"
 	"github.com/stretchr/testify/suite"
@@ -185,7 +187,7 @@ func (suite *PutManifestMiddlewareTestSuite) TestResourcesExceeded() {
 	mock.OnAnything(suite.quotaController, "IsEnabled").Return(true, nil)
 	mock.OnAnything(suite.blobController, "Exist").Return(false, nil)
 	mock.OnAnything(suite.blobController, "FindMissingAssociationsForProject").Return(nil, nil)
-	mock.OnAnything(suite.projectController, "Get").Return(&commonmodels.Project{}, nil)
+	mock.OnAnything(suite.projectController, "Get").Return(&proModels.Project{}, nil)
 
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -233,7 +235,7 @@ func (suite *PutManifestMiddlewareTestSuite) TestResourcesWarning() {
 		f := args.Get(4).(func() error)
 		f()
 	})
-	mock.OnAnything(suite.projectController, "Get").Return(&commonmodels.Project{}, nil)
+	mock.OnAnything(suite.projectController, "Get").Return(&proModels.Project{}, nil)
 
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -270,6 +272,25 @@ func (suite *PutManifestMiddlewareTestSuite) TestResourcesWarning() {
 		suite.Equal(http.StatusOK, rr.Code)
 		suite.Equal(1, eveCtx.Events.Len())
 	}
+}
+
+func (suite *PutManifestMiddlewareTestSuite) TestPutInvalid() {
+	unmarshalManifest = func(r *http.Request) (distribution.Manifest, distribution.Descriptor, error) {
+		return nil, distribution.Descriptor{}, std_err.New("json: cannot unmarshal string into Go value of type map")
+	}
+
+	mock.OnAnything(suite.quotaController, "IsEnabled").Return(true, nil)
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodPut, "/v2/library/photon/manifests/sha256:totallywrong", strings.NewReader("YmxhYmxhYmxh"))
+	rr := httptest.NewRecorder()
+
+	PutManifestMiddleware()(next).ServeHTTP(rr, req)
+	suite.Equal(http.StatusBadRequest, rr.Code)
+
 }
 
 func TestPutManifestMiddlewareTestSuite(t *testing.T) {

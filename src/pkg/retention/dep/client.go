@@ -17,13 +17,11 @@ package dep
 import (
 	"errors"
 	"fmt"
-	"github.com/goharbor/harbor/src/lib/selector"
-	"net/http"
-	"time"
-
 	"github.com/goharbor/harbor/src/common/http/modifier/auth"
 	"github.com/goharbor/harbor/src/jobservice/config"
+	"github.com/goharbor/harbor/src/lib/selector"
 	"github.com/goharbor/harbor/src/pkg/clients/core"
+	"net/http"
 )
 
 // DefaultClient for the retention
@@ -102,15 +100,15 @@ func (bc *basicClient) GetCandidates(repository *selector.Repository) ([]*select
 		}
 		for _, art := range artifacts {
 			if art.Digest == "" {
-				return nil, fmt.Errorf("Lack Digest of Candidate for %s/%s", repository.Namespace, repository.Name)
+				return nil, fmt.Errorf("lack digest of candidate for %s/%s", repository.Namespace, repository.Name)
 			}
 			labels := make([]string, 0)
 			for _, label := range art.Labels {
 				labels = append(labels, label.Name)
 			}
 			tags := make([]string, 0)
-			var lastPulledTime time.Time
-			var lastPushedTime time.Time
+			lastPulledTime := art.PullTime
+			lastPushedTime := art.PushTime
 			for _, t := range art.Tags {
 				tags = append(tags, t.Name)
 				if t.PullTime.After(lastPulledTime) {

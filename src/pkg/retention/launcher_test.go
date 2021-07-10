@@ -15,50 +15,27 @@
 package retention
 
 import (
-	"fmt"
+	"context"
+	"github.com/goharbor/harbor/src/lib/orm"
+	proModels "github.com/goharbor/harbor/src/pkg/project/models"
+	"testing"
+
 	"github.com/goharbor/harbor/src/common/job"
-	"github.com/goharbor/harbor/src/common/models"
 	_ "github.com/goharbor/harbor/src/lib/selector/selectors/doublestar"
 	"github.com/goharbor/harbor/src/pkg/project"
+	"github.com/goharbor/harbor/src/pkg/repository/model"
 	"github.com/goharbor/harbor/src/pkg/retention/policy"
 	"github.com/goharbor/harbor/src/pkg/retention/policy/rule"
 	"github.com/goharbor/harbor/src/pkg/retention/q"
 	hjob "github.com/goharbor/harbor/src/testing/job"
+	"github.com/goharbor/harbor/src/testing/mock"
+	projecttesting "github.com/goharbor/harbor/src/testing/pkg/project"
 	"github.com/goharbor/harbor/src/testing/pkg/repository"
+	tasktesting "github.com/goharbor/harbor/src/testing/pkg/task"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
-	"testing"
 )
-
-type fakeProjectManager struct {
-	projects []*models.Project
-}
-
-func (f *fakeProjectManager) List(...*models.ProjectQueryParam) ([]*models.Project, error) {
-	return f.projects, nil
-}
-func (f *fakeProjectManager) Get(idOrName interface{}) (*models.Project, error) {
-	id, ok := idOrName.(int64)
-	if ok {
-		for _, pro := range f.projects {
-			if pro.ProjectID == id {
-				return pro, nil
-			}
-		}
-		return nil, nil
-	}
-	name, ok := idOrName.(string)
-	if ok {
-		for _, pro := range f.projects {
-			if pro.Name == name {
-				return pro, nil
-			}
-		}
-		return nil, nil
-	}
-	return nil, fmt.Errorf("invalid parameter: %v, should be ID(int64) or name(string)", idOrName)
-}
 
 type fakeRetentionManager struct{}
 
@@ -70,16 +47,16 @@ func (f *fakeRetentionManager) GetTotalOfTasks(executionID int64) (int64, error)
 	return 0, nil
 }
 
-func (f *fakeRetentionManager) CreatePolicy(p *policy.Metadata) (int64, error) {
+func (f *fakeRetentionManager) CreatePolicy(ctx context.Context, p *policy.Metadata) (int64, error) {
 	return 0, nil
 }
-func (f *fakeRetentionManager) UpdatePolicy(p *policy.Metadata) error {
+func (f *fakeRetentionManager) UpdatePolicy(ctx context.Context, p *policy.Metadata) error {
 	return nil
 }
-func (f *fakeRetentionManager) DeletePolicyAndExec(ID int64) error {
+func (f *fakeRetentionManager) DeletePolicy(ctx context.Context, ID int64) error {
 	return nil
 }
-func (f *fakeRetentionManager) GetPolicy(ID int64) (*policy.Metadata, error) {
+func (f *fakeRetentionManager) GetPolicy(ctx context.Context, ID int64) (*policy.Metadata, error) {
 	return nil, nil
 }
 func (f *fakeRetentionManager) CreateExecution(execution *Execution) (int64, error) {
@@ -131,33 +108,39 @@ func (f *fakeRetentionManager) ListHistories(executionID int64, query *q.Query) 
 type launchTestSuite struct {
 	suite.Suite
 	projectMgr       project.Manager
-	repositoryMgr    *repository.FakeManager
+	execMgr          *tasktesting.ExecutionManager
+	taskMgr          *tasktesting.Manager
+	repositoryMgr    *repository.Manager
 	retentionMgr     Manager
 	jobserviceClient job.Client
 }
 
 func (l *launchTestSuite) SetupTest() {
-	pro1 := &models.Project{
+	pro1 := &proModels.Project{
 		ProjectID: 1,
 		Name:      "library",
 	}
-	pro2 := &models.Project{
+	pro2 := &proModels.Project{
 		ProjectID: 2,
 		Name:      "test",
 	}
-	l.projectMgr = &fakeProjectManager{
-		projects: []*models.Project{
-			pro1, pro2,
-		}}
-	l.repositoryMgr = &repository.FakeManager{}
+	projectMgr := &projecttesting.Manager{}
+	mock.OnAnything(projectMgr, "List").Return([]*proModels.Project{
+		pro1, pro2,
+	}, nil)
+	l.projectMgr = projectMgr
+	l.repositoryMgr = &repository.Manager{}
 	l.retentionMgr = &fakeRetentionManager{}
+	l.execMgr = &tasktesting.ExecutionManager{}
+	l.taskMgr = &tasktesting.Manager{}
 	l.jobserviceClient = &hjob.MockJobClient{
 		JobUUID: []string{"1"},
 	}
 }
 
 func (l *launchTestSuite) TestGetProjects() {
-	projects, err := getProjects(l.projectMgr)
+	ctx := orm.Context()
+	projects, err := getProjects(ctx, l.projectMgr)
 	require.Nil(l.T(), err)
 	assert.Equal(l.T(), 2, len(projects))
 	assert.Equal(l.T(), int64(1), projects[0].NamespaceID)
@@ -165,14 +148,15 @@ func (l *launchTestSuite) TestGetProjects() {
 }
 
 func (l *launchTestSuite) TestGetRepositories() {
-	l.repositoryMgr.On("List").Return([]*models.RepoRecord{
+	l.repositoryMgr.On("List", mock.Anything, mock.Anything).Return([]*model.RepoRecord{
 		{
 			RepositoryID: 1,
 			ProjectID:    1,
 			Name:         "library/image",
 		},
 	}, nil)
-	repositories, err := getRepositories(l.projectMgr, l.repositoryMgr, 1, true)
+	ctx := orm.Context()
+	repositories, err := getRepositories(ctx, l.projectMgr, l.repositoryMgr, 1)
 	require.Nil(l.T(), err)
 	l.repositoryMgr.AssertExpectations(l.T())
 	assert.Equal(l.T(), 1, len(repositories))
@@ -182,22 +166,28 @@ func (l *launchTestSuite) TestGetRepositories() {
 }
 
 func (l *launchTestSuite) TestLaunch() {
+	l.execMgr.On("Create", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(int64(1), nil)
+	l.taskMgr.On("Create", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(int64(1), nil)
+	l.taskMgr.On("Stop", mock.Anything, mock.Anything).Return(nil)
+
 	launcher := &launcher{
-		projectMgr:         l.projectMgr,
-		repositoryMgr:      l.repositoryMgr,
-		retentionMgr:       l.retentionMgr,
-		jobserviceClient:   l.jobserviceClient,
-		chartServerEnabled: true,
+		projectMgr:       l.projectMgr,
+		repositoryMgr:    l.repositoryMgr,
+		retentionMgr:     l.retentionMgr,
+		execMgr:          l.execMgr,
+		taskMgr:          l.taskMgr,
+		jobserviceClient: l.jobserviceClient,
 	}
 
+	ctx := orm.Context()
 	var ply *policy.Metadata
 	// nil policy
-	n, err := launcher.Launch(ply, 1, false)
+	n, err := launcher.Launch(ctx, ply, 1, false)
 	require.NotNil(l.T(), err)
 
 	// nil rules
 	ply = &policy.Metadata{}
-	n, err = launcher.Launch(ply, 1, false)
+	n, err = launcher.Launch(ctx, ply, 1, false)
 	require.Nil(l.T(), err)
 	assert.Equal(l.T(), int64(0), n)
 
@@ -207,11 +197,11 @@ func (l *launchTestSuite) TestLaunch() {
 			{},
 		},
 	}
-	_, err = launcher.Launch(ply, 1, false)
+	_, err = launcher.Launch(ctx, ply, 1, false)
 	require.NotNil(l.T(), err)
 
 	// system scope
-	l.repositoryMgr.On("List").Return([]*models.RepoRecord{
+	l.repositoryMgr.On("List", mock.Anything, mock.Anything).Return([]*model.RepoRecord{
 		{
 			RepositoryID: 1,
 			ProjectID:    1,
@@ -262,7 +252,7 @@ func (l *launchTestSuite) TestLaunch() {
 			},
 		},
 	}
-	n, err = launcher.Launch(ply, 1, false)
+	n, err = launcher.Launch(ctx, ply, 1, false)
 	require.Nil(l.T(), err)
 	l.repositoryMgr.AssertExpectations(l.T())
 	assert.Equal(l.T(), int64(1), n)
@@ -270,17 +260,21 @@ func (l *launchTestSuite) TestLaunch() {
 
 func (l *launchTestSuite) TestStop() {
 	t := l.T()
+	l.execMgr.On("Stop", mock.Anything, mock.Anything).Return(nil)
 	launcher := &launcher{
 		projectMgr:       l.projectMgr,
 		repositoryMgr:    l.repositoryMgr,
 		retentionMgr:     l.retentionMgr,
+		execMgr:          l.execMgr,
+		taskMgr:          l.taskMgr,
 		jobserviceClient: l.jobserviceClient,
 	}
+	ctx := orm.Context()
 	// invalid execution ID
-	err := launcher.Stop(0)
+	err := launcher.Stop(ctx, 0)
 	require.NotNil(t, err)
 
-	err = launcher.Stop(1)
+	err = launcher.Stop(ctx, 1)
 	require.Nil(t, err)
 }
 

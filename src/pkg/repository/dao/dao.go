@@ -16,12 +16,13 @@ package dao
 
 import (
 	"context"
+	"time"
+
 	o "github.com/astaxie/beego/orm"
-	"github.com/goharbor/harbor/src/common/models"
 	"github.com/goharbor/harbor/src/lib/errors"
 	"github.com/goharbor/harbor/src/lib/orm"
 	"github.com/goharbor/harbor/src/lib/q"
-	"time"
+	"github.com/goharbor/harbor/src/pkg/repository/model"
 )
 
 // DAO is the data access object interface for repository
@@ -29,17 +30,19 @@ type DAO interface {
 	// Count returns the total count of repositories according to the query
 	Count(ctx context.Context, query *q.Query) (count int64, err error)
 	// List repositories according to the query
-	List(ctx context.Context, query *q.Query) (repositories []*models.RepoRecord, err error)
+	List(ctx context.Context, query *q.Query) (repositories []*model.RepoRecord, err error)
 	// Get the repository specified by ID
-	Get(ctx context.Context, id int64) (repository *models.RepoRecord, err error)
+	Get(ctx context.Context, id int64) (repository *model.RepoRecord, err error)
 	// Create the repository
-	Create(ctx context.Context, repository *models.RepoRecord) (id int64, err error)
+	Create(ctx context.Context, repository *model.RepoRecord) (id int64, err error)
 	// Delete the repository specified by ID
 	Delete(ctx context.Context, id int64) (err error)
 	// Update updates the repository. Only the properties specified by "props" will be updated if it is set
-	Update(ctx context.Context, repository *models.RepoRecord, props ...string) (err error)
+	Update(ctx context.Context, repository *model.RepoRecord, props ...string) (err error)
 	// AddPullCount increase one pull count for the specified repository
 	AddPullCount(ctx context.Context, id int64) error
+	// NonEmptyRepos returns the repositories without any artifact or all the artifacts are untagged.
+	NonEmptyRepos(ctx context.Context) ([]*model.RepoRecord, error)
 }
 
 // New returns an instance of the default DAO
@@ -50,33 +53,26 @@ func New() DAO {
 type dao struct{}
 
 func (d *dao) Count(ctx context.Context, query *q.Query) (int64, error) {
-	if query != nil {
-		// ignore the page number and size
-		query = &q.Query{
-			Keywords: query.Keywords,
-		}
-	}
-	qs, err := orm.QuerySetter(ctx, &models.RepoRecord{}, query)
+	qs, err := orm.QuerySetterForCount(ctx, &model.RepoRecord{}, query)
 	if err != nil {
 		return 0, err
 	}
 	return qs.Count()
 }
-func (d *dao) List(ctx context.Context, query *q.Query) ([]*models.RepoRecord, error) {
-	repositories := []*models.RepoRecord{}
-	qs, err := orm.QuerySetter(ctx, &models.RepoRecord{}, query)
+func (d *dao) List(ctx context.Context, query *q.Query) ([]*model.RepoRecord, error) {
+	repositories := []*model.RepoRecord{}
+	qs, err := orm.QuerySetter(ctx, &model.RepoRecord{}, query)
 	if err != nil {
 		return nil, err
 	}
-	qs = qs.OrderBy("-CreationTime", "RepositoryID")
 	if _, err = qs.All(&repositories); err != nil {
 		return nil, err
 	}
 	return repositories, nil
 }
 
-func (d *dao) Get(ctx context.Context, id int64) (*models.RepoRecord, error) {
-	repository := &models.RepoRecord{
+func (d *dao) Get(ctx context.Context, id int64) (*model.RepoRecord, error) {
+	repository := &model.RepoRecord{
 		RepositoryID: id,
 	}
 	ormer, err := orm.FromContext(ctx)
@@ -92,7 +88,7 @@ func (d *dao) Get(ctx context.Context, id int64) (*models.RepoRecord, error) {
 	return repository, nil
 }
 
-func (d *dao) Create(ctx context.Context, repository *models.RepoRecord) (int64, error) {
+func (d *dao) Create(ctx context.Context, repository *model.RepoRecord) (int64, error) {
 	ormer, err := orm.FromContext(ctx)
 	if err != nil {
 		return 0, err
@@ -109,7 +105,7 @@ func (d *dao) Delete(ctx context.Context, id int64) error {
 	if err != nil {
 		return err
 	}
-	n, err := ormer.Delete(&models.RepoRecord{
+	n, err := ormer.Delete(&model.RepoRecord{
 		RepositoryID: id,
 	})
 	if err != nil {
@@ -121,7 +117,7 @@ func (d *dao) Delete(ctx context.Context, id int64) error {
 	return nil
 }
 
-func (d *dao) Update(ctx context.Context, repository *models.RepoRecord, props ...string) error {
+func (d *dao) Update(ctx context.Context, repository *model.RepoRecord, props ...string) error {
 	ormer, err := orm.FromContext(ctx)
 	if err != nil {
 		return err
@@ -141,7 +137,7 @@ func (d *dao) AddPullCount(ctx context.Context, id int64) error {
 	if err != nil {
 		return err
 	}
-	num, err := ormer.QueryTable(new(models.RepoRecord)).Filter("RepositoryID", id).Update(
+	num, err := ormer.QueryTable(new(model.RepoRecord)).Filter("RepositoryID", id).Update(
 		o.Params{
 			"pull_count":  o.ColValue(o.ColAdd, 1),
 			"update_time": time.Now(),
@@ -154,4 +150,20 @@ func (d *dao) AddPullCount(ctx context.Context, id int64) error {
 
 	}
 	return nil
+}
+
+func (d *dao) NonEmptyRepos(ctx context.Context) ([]*model.RepoRecord, error) {
+	var repos []*model.RepoRecord
+	ormer, err := orm.FromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	sql := `select * from repository where repository_id in (select distinct repository_id from tag)`
+	_, err = ormer.Raw(sql).QueryRows(&repos)
+	if err != nil {
+		return repos, err
+	}
+
+	return repos, nil
 }

@@ -11,14 +11,14 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-import { Component, ViewChild, OnInit } from '@angular/core';
+import { Component, OnInit, ViewChild } from '@angular/core';
 import { Router } from '@angular/router';
 
-import { NewUserFormComponent } from '../../shared/new-user-form/new-user-form.component';
-import { User } from '../../user/user';
-import { UserService } from '../../user/user.service';
-import { AlertType } from '../../shared/shared.const';
-import { MessageService } from '../../global-message/message.service';
+import { NewUserFormComponent } from '../../shared/components/new-user-form/new-user-form.component';
+import { User } from '../../base/left-side-nav/user/user';
+import { UserService } from '../../base/left-side-nav/user/user.service';
+import { MessageService } from '../../shared/components/global-message/message.service';
+import { AlertType } from "../../shared/entities/shared.const";
 
 @Component({
     selector: 'sign-up-page',
@@ -35,7 +35,7 @@ export class SignUpPageComponent implements OnInit {
         private msgService: MessageService,
         private router: Router) { }
 
-    @ViewChild(NewUserFormComponent, {static: false})
+    @ViewChild(NewUserFormComponent)
     newUserForm: NewUserFormComponent;
 
     getNewUser(): User {

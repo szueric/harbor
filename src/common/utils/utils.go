@@ -64,10 +64,9 @@ func ParseRepository(repository string) (project, rest string) {
 	return
 }
 
-// GenerateRandomString generates a random string
-func GenerateRandomString() string {
-	length := 32
-	const chars = "abcdefghijklmnopqrstuvwxyz0123456789"
+// GenerateRandomStringWithLen generates a random string with length
+func GenerateRandomStringWithLen(length int) string {
+	const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	l := len(chars)
 	result := make([]byte, length)
 	_, err := rand.Read(result)
@@ -80,13 +79,18 @@ func GenerateRandomString() string {
 	return string(result)
 }
 
+// GenerateRandomString generate a random string with 32 byte length
+func GenerateRandomString() string {
+	return GenerateRandomStringWithLen(32)
+}
+
 // TestTCPConn tests TCP connection
 // timeout: the total time before returning if something is wrong
 // with the connection, in second
 // interval: the interval time for retring after failure, in second
 func TestTCPConn(addr string, timeout, interval int) error {
-	success := make(chan int)
-	cancel := make(chan int)
+	success := make(chan int, 1)
+	cancel := make(chan int, 1)
 
 	go func() {
 		n := 1
@@ -205,16 +209,6 @@ func SafeCastFloat64(value interface{}) float64 {
 	return 0
 }
 
-// ParseOfftime ...
-func ParseOfftime(offtime int64) (hour, minite, second int) {
-	offtime = offtime % (3600 * 24)
-	hour = int(offtime / 3600)
-	offtime = offtime % 3600
-	minite = int(offtime / 60)
-	second = int(offtime % 60)
-	return
-}
-
 // TrimLower ...
 func TrimLower(str string) string {
 	return strings.TrimSpace(strings.ToLower(str))
@@ -262,11 +256,6 @@ func IsContainIllegalChar(s string, illegalChar []string) bool {
 		}
 	}
 	return false
-}
-
-// IsDigest A sha256 is a string with 64 characters.
-func IsDigest(ref string) bool {
-	return strings.HasPrefix(ref, "sha256:") && len(ref) == 71
 }
 
 // ParseJSONInt ...

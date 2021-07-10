@@ -54,9 +54,9 @@ type authorizer struct {
 }
 
 func (a *authorizer) Modify(req *http.Request) error {
-	// Nil URL means this is the first time the authorizer is called
+	// Nil underlying authorizer means this is the first time the authorizer is called
 	// Try to connect to the registry and determine the auth scheme
-	if a.url == nil {
+	if a.authorizer == nil {
 		// to avoid concurrent issue
 		a.Lock()
 		defer a.Unlock()
@@ -74,7 +74,7 @@ func (a *authorizer) Modify(req *http.Request) error {
 }
 
 func (a *authorizer) initialize(u *url.URL) error {
-	if a.url != nil {
+	if a.authorizer != nil {
 		return nil
 	}
 	url, err := url.Parse(u.Scheme + "://" + u.Host + "/v2/")
@@ -86,6 +86,7 @@ func (a *authorizer) initialize(u *url.URL) error {
 	if err != nil {
 		return err
 	}
+	defer resp.Body.Close()
 
 	challenges := challenge.ResponseChallenges(resp)
 	// no challenge, mean no auth

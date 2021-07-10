@@ -16,15 +16,20 @@ package dao
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/goharbor/harbor/src/lib/orm"
+	"github.com/goharbor/harbor/src/lib/q"
 	"github.com/goharbor/harbor/src/pkg/quota/models"
-	"github.com/goharbor/harbor/src/pkg/types"
+	"github.com/goharbor/harbor/src/pkg/quota/types"
 )
 
 // DAO the dao for Quota and QuotaUsage
 type DAO interface {
+	// Count returns the total count of quotas according to the query.
+	Count(ctx context.Context, query *q.Query) (int64, error)
+
 	// Create create quota for reference object
 	Create(ctx context.Context, reference, referenceID string, hardLimits, used types.ResourceList) (int64, error)
 
@@ -42,6 +47,9 @@ type DAO interface {
 
 	// Update update quota
 	Update(ctx context.Context, quota *models.Quota) error
+
+	// List list quotas
+	List(ctx context.Context, query *q.Query) ([]*models.Quota, error)
 }
 
 // New returns an instance of the default DAO
@@ -50,6 +58,23 @@ func New() DAO {
 }
 
 type dao struct{}
+
+func (d *dao) Count(ctx context.Context, query *q.Query) (int64, error) {
+	o, err := orm.FromContext(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	condition, params := listConditions(query)
+	sql := fmt.Sprintf("SELECT COUNT(1) FROM quota AS a JOIN quota_usage AS b ON a.id = b.id %s", condition)
+
+	var count int64
+	if err := o.Raw(sql, params).QueryRow(&count); err != nil {
+		return 0, err
+	}
+
+	return count, nil
+}
 
 func (d *dao) Create(ctx context.Context, reference, referenceID string, hardLimits, used types.ResourceList) (int64, error) {
 	o, err := orm.FromContext(ctx)
@@ -190,6 +215,52 @@ func (d *dao) Update(ctx context.Context, quota *models.Quota) error {
 	}
 
 	return nil
+}
+
+func (d *dao) List(ctx context.Context, query *q.Query) ([]*models.Quota, error) {
+	o, err := orm.FromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	condition, params := listConditions(query)
+
+	sql := fmt.Sprintf(`
+SELECT
+  a.id,
+  a.reference,
+  a.reference_id,
+  a.hard,
+  b.used,
+  b.creation_time,
+  b.update_time
+FROM
+  quota AS a
+  JOIN quota_usage AS b ON a.id = b.id %s`, condition)
+
+	orderBy := listOrderBy(query)
+	if orderBy != "" {
+		sql += ` order by ` + orderBy
+	}
+
+	if query != nil {
+		page, size := query.PageNumber, query.PageSize
+		if size > 0 {
+			sql += ` limit ?`
+			params = append(params, size)
+			if page > 0 {
+				sql += ` offset ?`
+				params = append(params, size*(page-1))
+			}
+		}
+	}
+
+	var quotas []*models.Quota
+	if _, err := o.Raw(sql, params).QueryRows(&quotas); err != nil {
+		return nil, err
+	}
+
+	return quotas, nil
 }
 
 func toQuota(quota *Quota, usage *QuotaUsage) *models.Quota {

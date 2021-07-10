@@ -22,12 +22,10 @@ import (
 	"strings"
 	"time"
 
-	// registry image resolvers
-	_ "github.com/goharbor/harbor/src/controller/artifact/processor/image"
-	// register chart resolver
-	_ "github.com/goharbor/harbor/src/controller/artifact/processor/chart"
-	// register CNAB resolver
-	_ "github.com/goharbor/harbor/src/controller/artifact/processor/cnab"
+	"github.com/goharbor/harbor/src/controller/artifact/processor/chart"
+	"github.com/goharbor/harbor/src/controller/artifact/processor/cnab"
+	"github.com/goharbor/harbor/src/controller/artifact/processor/image"
+	"github.com/goharbor/harbor/src/lib/icon"
 
 	"github.com/goharbor/harbor/src/controller/artifact/processor"
 	"github.com/goharbor/harbor/src/controller/event/metadata"
@@ -41,10 +39,11 @@ import (
 	"github.com/goharbor/harbor/src/pkg/artifactrash"
 	"github.com/goharbor/harbor/src/pkg/artifactrash/model"
 	"github.com/goharbor/harbor/src/pkg/blob"
-	"github.com/goharbor/harbor/src/pkg/immutabletag/match"
-	"github.com/goharbor/harbor/src/pkg/immutabletag/match/rule"
+	"github.com/goharbor/harbor/src/pkg/immutable/match"
+	"github.com/goharbor/harbor/src/pkg/immutable/match/rule"
 	"github.com/goharbor/harbor/src/pkg/label"
 	"github.com/goharbor/harbor/src/pkg/notification"
+	"github.com/goharbor/harbor/src/pkg/notifier/event"
 	"github.com/goharbor/harbor/src/pkg/registry"
 	"github.com/goharbor/harbor/src/pkg/repository"
 	"github.com/goharbor/harbor/src/pkg/signature"
@@ -63,6 +62,13 @@ var (
 
 	// ErrSkip error to skip walk the children of the artifact
 	ErrSkip = stderrors.New("skip")
+
+	// icon digests for each known type
+	defaultIcons = map[string]string{
+		image.ArtifactTypeImage: icon.DigestOfIconImage,
+		chart.ArtifactTypeChart: icon.DigestOfIconChart,
+		cnab.ArtifactTypeCNAB:   icon.DigestOfIconCNAB,
+	}
 )
 
 // Controller defines the operations related with artifacts and tags
@@ -117,8 +123,6 @@ func NewController() Controller {
 		abstractor:   NewAbstractor(),
 	}
 }
-
-// TODO concurrency summary
 
 type controller struct {
 	tagCtl       tag.Controller
@@ -186,7 +190,7 @@ func (c *controller) ensureArtifact(ctx context.Context, repository, digest stri
 	}
 
 	// populate the artifact type
-	artifact.Type = processor.Get(artifact.MediaType).GetArtifactType()
+	artifact.Type = processor.Get(artifact.MediaType).GetArtifactType(ctx, artifact)
 
 	// create it
 	// use orm.WithTransaction here to avoid the issue:
@@ -195,21 +199,21 @@ func (c *controller) ensureArtifact(ctx context.Context, repository, digest stri
 	if err = orm.WithTransaction(func(ctx context.Context) error {
 		id, err := c.artMgr.Create(ctx, artifact)
 		if err != nil {
-			// if got conflict error, try to get the artifact again
-			if errors.IsConflictErr(err) {
-				var e error
-				artifact, e = c.artMgr.GetByDigest(ctx, repository, digest)
-				if e != nil {
-					err = e
-				}
-			}
 			return err
 		}
 		created = true
 		artifact.ID = id
 		return nil
-	})(ctx); err != nil && !errors.IsConflictErr(err) {
-		return false, nil, err
+	})(ctx); err != nil {
+		// got error that isn't conflict error, return directly
+		if !errors.IsConflictErr(err) {
+			return false, nil, err
+		}
+		// if got conflict error, try to get the artifact again
+		artifact, err = c.artMgr.GetByDigest(ctx, repository, digest)
+		if err != nil {
+			return false, nil, err
+		}
 	}
 
 	return created, artifact, nil
@@ -352,7 +356,7 @@ func (c *controller) deleteDeeply(ctx context.Context, id int64, isRoot bool) er
 		return err
 	}
 
-	blobs, err := c.blobMgr.List(ctx, blob.ListParams{ArtifactDigest: art.Digest})
+	blobs, err := c.blobMgr.List(ctx, q.New(q.KeyWords{"artifactDigest": art.Digest}))
 	if err != nil {
 		return err
 	}
@@ -415,33 +419,17 @@ func (c *controller) copyDeeply(ctx context.Context, srcRepo, reference, dstRepo
 	digest := srcArt.Digest
 
 	// check the existence of artifact in the destination repository
-	if isRoot {
-		// for the root artifact, check the existence by calling "Count()"
-		// which finds the artifact based on all parent artifacts to avoid
-		// the issue: https://github.com/goharbor/harbor/issues/11222
-		n, err := c.artMgr.Count(ctx, &q.Query{
-			Keywords: map[string]interface{}{
-				"RepositoryName": dstRepo,
-				"Digest":         digest,
-			},
-		})
-		if err != nil {
-			return 0, err
-		}
-		if n > 0 {
-			return 0, errors.New(nil).WithCode(errors.ConflictCode).
-				WithMessage("the artifact %s@%s already exists", dstRepo, digest)
-		}
-	} else {
-		// for the child artifact, check the existence by calling "GetByReference" directly
-		dstArt, err := c.GetByReference(ctx, dstRepo, digest, option)
-		if err == nil {
-			// the child artifact already under the destination repository, skip
+	dstArt, err := c.GetByReference(ctx, dstRepo, digest, option)
+	if err == nil {
+		// the child artifact already exists under the destination repository, skip
+		if !isRoot {
 			return dstArt.ID, nil
 		}
-		if !errors.IsErr(err, errors.NotFoundCode) {
-			return 0, err
-		}
+		// the root parent already exists, goto next step to copy tags
+		goto tags
+	}
+	if !errors.IsErr(err, errors.NotFoundCode) {
+		return 0, err
 	}
 
 	// the artifact doesn't exist under the destination repository, continue to copy
@@ -457,6 +445,7 @@ func (c *controller) copyDeeply(ctx context.Context, srcRepo, reference, dstRepo
 		return 0, err
 	}
 
+tags:
 	// only copy the tags of outermost artifact
 	var tags []string
 	for _, tag := range srcArt.Tags {
@@ -500,8 +489,27 @@ func (c *controller) GetAddition(ctx context.Context, artifactID int64, addition
 	return processor.Get(artifact.MediaType).AbstractAddition(ctx, artifact, addition)
 }
 
-func (c *controller) AddLabel(ctx context.Context, artifactID int64, labelID int64) error {
-	return c.labelMgr.AddTo(ctx, labelID, artifactID)
+func (c *controller) AddLabel(ctx context.Context, artifactID int64, labelID int64) (err error) {
+	defer func() {
+		if err == nil {
+			// trigger label artifact event
+			e := &event.Event{}
+			metaData := &metadata.ArtifactLabeledMetadata{
+				ArtifactID: artifactID,
+				LabelID:    labelID,
+				Ctx:        ctx,
+			}
+			if err := e.Build(metaData); err == nil {
+				if err := e.Publish(); err != nil {
+					log.Error(errors.Wrap(err, "mark label to resource handler: event publish"))
+				}
+			} else {
+				log.Error(errors.Wrap(err, "mark label to resource handler: event build"))
+			}
+		}
+	}()
+	err = c.labelMgr.AddTo(ctx, labelID, artifactID)
+	return
 }
 
 func (c *controller) RemoveLabel(ctx context.Context, artifactID int64, labelID int64) error {
@@ -562,6 +570,9 @@ func (c *controller) assembleArtifact(ctx context.Context, art *artifact.Artifac
 	// populate addition links
 	c.populateAdditionLinks(ctx, artifact)
 
+	// populate icon for the known artifact types
+	c.populateIcon(artifact)
+
 	if option == nil {
 		return artifact
 	}
@@ -572,6 +583,16 @@ func (c *controller) assembleArtifact(ctx context.Context, art *artifact.Artifac
 		c.populateLabels(ctx, artifact)
 	}
 	return artifact
+}
+
+func (c *controller) populateIcon(art *Artifact) {
+	if len(art.Icon) == 0 {
+		if i, ok := defaultIcons[art.Type]; ok {
+			art.Icon = i
+		} else {
+			art.Icon = icon.DigestOfIconDefault
+		}
+	}
 }
 
 func (c *controller) populateTags(ctx context.Context, art *Artifact, option *tag.Option) {
@@ -597,7 +618,7 @@ func (c *controller) populateLabels(ctx context.Context, art *Artifact) {
 }
 
 func (c *controller) populateAdditionLinks(ctx context.Context, artifact *Artifact) {
-	types := processor.Get(artifact.MediaType).ListAdditionTypes()
+	types := processor.Get(artifact.MediaType).ListAdditionTypes(ctx, &artifact.Artifact)
 	if len(types) > 0 {
 		version := lib.GetAPIVersion(ctx)
 		for _, t := range types {

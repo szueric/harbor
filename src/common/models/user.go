@@ -15,7 +15,10 @@
 package models
 
 import (
+	"context"
 	"time"
+
+	"github.com/astaxie/beego/orm"
 )
 
 // UserTable is the name of table in DB that holds the user object
@@ -24,7 +27,7 @@ const UserTable = "harbor_user"
 // User holds the details of a user.
 type User struct {
 	UserID          int    `orm:"pk;auto;column(user_id)" json:"user_id"`
-	Username        string `orm:"column(username)" json:"username"`
+	Username        string `orm:"column(username)" json:"username" sort:"default"`
 	Email           string `orm:"column(email)" json:"email"`
 	Password        string `orm:"column(password)" json:"password"`
 	PasswordVersion string `orm:"column(password_version)" json:"password_version"`
@@ -46,15 +49,24 @@ type User struct {
 	OIDCUserMeta    *OIDCUser `orm:"-" json:"oidc_user_meta,omitempty"`
 }
 
-// UserQuery ...
-type UserQuery struct {
-	UserIDs    []int
-	Username   string
-	Email      string
-	Pagination *Pagination
-}
-
 // TableName ...
 func (u *User) TableName() string {
 	return UserTable
+}
+
+// FilterByUsernameOrEmail generates the query setter to match username or email column to the same value
+func (u *User) FilterByUsernameOrEmail(ctx context.Context, qs orm.QuerySeter, key string, value interface{}) orm.QuerySeter {
+	usernameOrEmail, ok := value.(string)
+	if !ok {
+		return qs
+	}
+	subCond := orm.NewCondition()
+	subCond = subCond.Or("Username", usernameOrEmail).Or("Email", usernameOrEmail)
+
+	conds := qs.GetCond()
+	if conds == nil {
+		conds = orm.NewCondition()
+	}
+	qs = qs.SetCond(conds.AndCond(subCond))
+	return qs
 }

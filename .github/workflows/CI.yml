@@ -27,16 +27,17 @@ jobs:
     runs-on:
       #- self-hosted
       - ubuntu-latest
+    timeout-minutes: 100
     steps:
-      - name: Set up Go 1.13
+      - name: Set up Go 1.16
         uses: actions/setup-go@v1
         with:
-           go-version: 1.13.8
+           go-version: 1.16.5
         id: go
       - name: setup Docker
         uses: docker-practice/actions-setup-docker@0.0.1
         with:
-          docker_version: 18.09
+          docker_version: 20.04
           docker_channel: stable
       - uses: actions/checkout@v2
         with:
@@ -46,9 +47,9 @@ jobs:
           cd src/github.com/goharbor/harbor
           pwd
           go env
-          echo "::set-env name=GOPATH::$(go env GOPATH):$GITHUB_WORKSPACE"
-          echo "::add-path::$(go env GOPATH)/bin"
-          echo "::set-env name=TOKEN_PRIVATE_KEY_PATH::${GITHUB_WORKSPACE}/src/github.com/goharbor/harbor/tests/private_key.pem"
+          echo "GOPATH=$(go env GOPATH):$GITHUB_WORKSPACE" >> $GITHUB_ENV
+          echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+          echo "TOKEN_PRIVATE_KEY_PATH=${GITHUB_WORKSPACE}/src/github.com/goharbor/harbor/tests/private_key.pem" >> $GITHUB_ENV
         shell: bash
       - name: before_install
         run: |
@@ -63,7 +64,7 @@ jobs:
           sudo mv docker-compose /usr/local/bin
           IP=`hostname -I | awk '{print $1}'`
           echo '{"insecure-registries" : ["'$IP':5000"]}' | sudo tee /etc/docker/daemon.json
-          echo "::set-env name=IP::$IP"
+          echo "IP=$IP" >> $GITHUB_ENV
           sudo cp ./tests/harbor_ca.crt /usr/local/share/ca-certificates/
           sudo update-ca-certificates
           sudo service docker restart
@@ -71,19 +72,20 @@ jobs:
         run: |
           cd src/github.com/goharbor/harbor
           env
+          df -h
           bash ./tests/showtime.sh ./tests/ci/ut_install.sh
       - name: script
-        env:
-          COVERALLS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo IP: $IP
+          df -h
           cd src/github.com/goharbor/harbor
           bash ./tests/showtime.sh ./tests/ci/ut_run.sh $IP
+          df -h
       - name: Codecov For BackEnd
         uses: codecov/codecov-action@v1
         with:
           file: ./src/github.com/goharbor/harbor/profile.cov
-          yml: ./src/github.com/goharbor/harbor/.github/codecov-ut-config/codecov.yml
+          flags: unittests
 
   APITEST_DB:
     env:
@@ -91,11 +93,12 @@ jobs:
     runs-on:
       #- self-hosted
       - ubuntu-latest
+    timeout-minutes: 100
     steps:
-      - name: Set up Go 1.13
+      - name: Set up Go 1.16
         uses: actions/setup-go@v1
         with:
-          go-version: 1.13.8
+          go-version: 1.16.5
         id: go
       - name: setup Docker
         uses: docker-practice/actions-setup-docker@0.0.1
@@ -110,11 +113,12 @@ jobs:
           cd src/github.com/goharbor/harbor
           pwd
           go env
-          echo "::set-env name=CNAB_PATH::$(go env GOPATH)/src/github.com/docker"
-          echo "::set-env name=GITHUB_TOKEN::${{ secrets.GITHUB_TOKEN }}"
-          echo "::set-env name=GOPATH::$(go env GOPATH):$GITHUB_WORKSPACE"
-          echo "::add-path::$(go env GOPATH)/bin"
-          echo "::set-env name=TOKEN_PRIVATE_KEY_PATH::${GITHUB_WORKSPACE}/src/github.com/goharbor/harbor/tests/private_key.pem"
+          echo "GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_ENV
+          echo "GOPATH=$(go env GOPATH):$GITHUB_WORKSPACE" >> $GITHUB_ENV
+          echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+          echo "TOKEN_PRIVATE_KEY_PATH=${GITHUB_WORKSPACE}/src/github.com/goharbor/harbor/tests/private_key.pem" >> $GITHUB_ENV
+          IP=`hostname -I | awk '{print $1}'`
+          echo "IP=$IP" >> $GITHUB_ENV
         shell: bash
       - name: before_install
         run: |
@@ -122,35 +126,86 @@ jobs:
           cd src/github.com/goharbor/harbor
           pwd
           env
+          df -h
           #sudo apt install -y xvfb
           #xvfb-run ls
           curl -L https://github.com/docker/compose/releases/download/${DOCKER_COMPOSE_VERSION}/docker-compose-`uname -s`-`uname -m` > docker-compose
           chmod +x docker-compose
           sudo mv docker-compose /usr/local/bin
-          IP=`hostname -I | awk '{print $1}'`
-          echo '{"insecure-registries" : ["'$IP':5000"]}' | sudo tee /etc/docker/daemon.json
-          echo "::set-env name=IP::$IP"
-          sudo cp ./tests/harbor_ca.crt /usr/local/share/ca-certificates/
-          sudo update-ca-certificates
-          sudo service docker restart
-          wget https://get.helm.sh/helm-v3.1.1-linux-386.tar.gz && tar zxvf helm-v3.1.1-linux-386.tar.gz
-          sudo mv linux-386/helm /usr/local/bin/helm3
-          helm3 plugin install https://github.com/chartmuseum/helm-push
-          mkdir -p $CNAB_PATH && cd $CNAB_PATH && git clone https://github.com/cnabio/cnab-to-oci.git
-          cd cnab-to-oci && git checkout v0.3.0-beta4
-          go list
-          make build
-          sudo mv bin/cnab-to-oci /usr/local/bin
       - name: install
         run: |
           cd src/github.com/goharbor/harbor
           env
+          df -h
+          docker system prune -a -f
           bash ./tests/showtime.sh ./tests/ci/api_common_install.sh $IP DB
       - name: script
         run: |
           cd src/github.com/goharbor/harbor
           echo IP: $IP
+          df -h
           bash ./tests/showtime.sh ./tests/ci/api_run.sh DB $IP
+          df -h
+
+  APITEST_DB_PROXY_CACHE:
+    env:
+      APITEST_DB: true
+    runs-on:
+      #- self-hosted
+      - ubuntu-latest
+    timeout-minutes: 100
+    steps:
+      - name: Set up Go 1.16
+        uses: actions/setup-go@v1
+        with:
+          go-version: 1.16.5
+        id: go
+      - name: setup Docker
+        uses: docker-practice/actions-setup-docker@0.0.1
+        with:
+          docker_version: 18.09
+          docker_channel: stable
+      - uses: actions/checkout@v2
+        with:
+          path: src/github.com/goharbor/harbor
+      - name: setup env
+        run: |
+          cd src/github.com/goharbor/harbor
+          pwd
+          go env
+          echo "GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_ENV
+          echo "GOPATH=$(go env GOPATH):$GITHUB_WORKSPACE" >> $GITHUB_ENV
+          echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+          echo "TOKEN_PRIVATE_KEY_PATH=${GITHUB_WORKSPACE}/src/github.com/goharbor/harbor/tests/private_key.pem" >> $GITHUB_ENV
+          IP=`hostname -I | awk '{print $1}'`
+          echo "IP=$IP" >> $GITHUB_ENV
+        shell: bash
+      - name: before_install
+        run: |
+          set -x
+          cd src/github.com/goharbor/harbor
+          pwd
+          env
+          df -h
+          #sudo apt install -y xvfb
+          #xvfb-run ls
+          curl -L https://github.com/docker/compose/releases/download/${DOCKER_COMPOSE_VERSION}/docker-compose-`uname -s`-`uname -m` > docker-compose
+          chmod +x docker-compose
+          sudo mv docker-compose /usr/local/bin
+      - name: install
+        run: |
+          cd src/github.com/goharbor/harbor
+          env
+          df -h
+          docker system prune -a -f
+          bash ./tests/showtime.sh ./tests/ci/api_common_install.sh $IP DB
+      - name: script
+        run: |
+          cd src/github.com/goharbor/harbor
+          echo IP: $IP
+          df -h
+          bash ./tests/showtime.sh ./tests/ci/api_run.sh PROXY_CACHE $IP
+          df -h
 
   APITEST_LDAP:
     env:
@@ -158,11 +213,12 @@ jobs:
     runs-on:
       #- self-hosted
       - ubuntu-latest
+    timeout-minutes: 100
     steps:
-      - name: Set up Go 1.13
+      - name: Set up Go 1.16
         uses: actions/setup-go@v1
         with:
-          go-version: 1.13.8
+          go-version: 1.16.5
         id: go
       - name: setup Docker
         uses: docker-practice/actions-setup-docker@0.0.1
@@ -177,9 +233,11 @@ jobs:
           cd src/github.com/goharbor/harbor
           pwd
           go env
-          echo "::set-env name=GOPATH::$(go env GOPATH):$GITHUB_WORKSPACE"
-          echo "::add-path::$(go env GOPATH)/bin"
-          echo "::set-env name=TOKEN_PRIVATE_KEY_PATH::${GITHUB_WORKSPACE}/src/github.com/goharbor/harbor/tests/private_key.pem"
+          echo "GOPATH=$(go env GOPATH):$GITHUB_WORKSPACE" >> $GITHUB_ENV
+          echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+          echo "TOKEN_PRIVATE_KEY_PATH=${GITHUB_WORKSPACE}/src/github.com/goharbor/harbor/tests/private_key.pem" >> $GITHUB_ENV
+          IP=`hostname -I | awk '{print $1}'`
+          echo "IP=$IP" >> $GITHUB_ENV
         shell: bash
       - name: before_install
         run: |
@@ -187,27 +245,25 @@ jobs:
           cd src/github.com/goharbor/harbor
           pwd
           env
+          df -h
           #sudo apt install -y xvfb
           #xvfb-run ls
           curl -L https://github.com/docker/compose/releases/download/${DOCKER_COMPOSE_VERSION}/docker-compose-`uname -s`-`uname -m` > docker-compose
           chmod +x docker-compose
           sudo mv docker-compose /usr/local/bin
-          IP=`hostname -I | awk '{print $1}'`
-          echo '{"insecure-registries" : ["'$IP':5000"]}' | sudo tee /etc/docker/daemon.json
-          echo "::set-env name=IP::$IP"
-          sudo cp ./tests/harbor_ca.crt /usr/local/share/ca-certificates/
-          sudo update-ca-certificates
-          sudo service docker restart
       - name: install
         run: |
           cd src/github.com/goharbor/harbor
           env
+          df -h
           bash ./tests/showtime.sh ./tests/ci/api_common_install.sh $IP LDAP
       - name: script
         run: |
           echo IP: $IP
+          df -h
           cd src/github.com/goharbor/harbor
           bash ./tests/showtime.sh ./tests/ci/api_run.sh LDAP $IP
+          df -h
 
   OFFLINE:
     env:
@@ -215,11 +271,12 @@ jobs:
     runs-on:
       #- self-hosted
       - ubuntu-latest
+    timeout-minutes: 100
     steps:
-      - name: Set up Go 1.13
+      - name: Set up Go 1.16
         uses: actions/setup-go@v1
         with:
-          go-version: 1.13.8
+          go-version: 1.16.5
         id: go
       - name: setup Docker
         uses: docker-practice/actions-setup-docker@0.0.1
@@ -235,9 +292,9 @@ jobs:
           pwd
           docker version
           go env
-          echo "::set-env name=GOPATH::$(go env GOPATH):$GITHUB_WORKSPACE"
-          echo "::add-path::$(go env GOPATH)/bin"
-          echo "::set-env name=TOKEN_PRIVATE_KEY_PATH::${GITHUB_WORKSPACE}/src/github.com/goharbor/harbor/tests/private_key.pem"
+          echo "GOPATH=$(go env GOPATH):$GITHUB_WORKSPACE" >> $GITHUB_ENV
+          echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+          echo "TOKEN_PRIVATE_KEY_PATH=${GITHUB_WORKSPACE}/src/github.com/goharbor/harbor/tests/private_key.pem" >> $GITHUB_ENV
         shell: bash
       - name: before_install
         run: |
@@ -245,6 +302,7 @@ jobs:
           cd src/github.com/goharbor/harbor
           pwd
           env
+          df -h
           #sudo apt install -y xvfb
           #xvfb-run ls
           curl -L https://github.com/docker/compose/releases/download/${DOCKER_COMPOSE_VERSION}/docker-compose-`uname -s`-`uname -m` > docker-compose
@@ -252,15 +310,17 @@ jobs:
           sudo mv docker-compose /usr/local/bin
           IP=`hostname -I | awk '{print $1}'`
           echo '{"insecure-registries" : ["'$IP':5000"]}' | sudo tee /etc/docker/daemon.json
-          echo "::set-env name=IP::$IP"
+          echo "IP=$IP" >> $GITHUB_ENV
           sudo cp ./tests/harbor_ca.crt /usr/local/share/ca-certificates/
           sudo update-ca-certificates
           sudo service docker restart
       - name: script
         run: |
           echo IP: $IP
+          df -h
           cd src/github.com/goharbor/harbor
           bash ./tests/showtime.sh ./tests/ci/distro_installer.sh
+          df -h
 
   UI_UT:
     env:
@@ -268,46 +328,23 @@ jobs:
     runs-on:
       #- self-hosted
       - ubuntu-latest
+    timeout-minutes: 100
     steps:
       - uses: actions/setup-node@v1
         with:
-          node-version: '10.16.2'
+          node-version: '16'
       - uses: actions/checkout@v2
         with:
           path: src/github.com/goharbor/harbor
-      - name: setup env
-        run: |
-          cd src/github.com/goharbor/harbor
-          pwd
-          go env
-          echo "::set-env name=GOPATH::$(go env GOPATH):$GITHUB_WORKSPACE"
-          echo "::add-path::$(go env GOPATH)/bin"
-          echo "::set-env name=TOKEN_PRIVATE_KEY_PATH::${GITHUB_WORKSPACE}/src/github.com/goharbor/harbor/tests/private_key.pem"
-        shell: bash
-      - name: before_install
-        run: |
-          set -x
-          cd src/github.com/goharbor/harbor
-          pwd
-          env
-          #sudo apt install -y xvfb
-          #xvfb-run ls
-          #curl -L https://github.com/docker/compose/releases/download/${DOCKER_COMPOSE_VERSION}/docker-compose-`uname -s`-`uname -m` > docker-compose
-          #chmod +x docker-compose
-          #sudo mv docker-compose /usr/local/bin
-          IP=`hostname -I | awk '{print $1}'`
-          #echo '{"insecure-registries" : ["'$IP':5000"]}' | sudo tee /etc/docker/daemon.json
-          echo "::set-env name=IP::$IP"
-          sudo cp ./tests/harbor_ca.crt /usr/local/share/ca-certificates/
-          sudo update-ca-certificates
-          #sudo service docker restart
       - name: script
         run: |
           echo IP: $IP
+          df -h
           cd src/github.com/goharbor/harbor
           bash ./tests/showtime.sh ./tests/ci/ui_ut_run.sh
+          df -h
       - name: Codecov For UI
-        uses: codecov/codecov-action@v1.0.5
+        uses: codecov/codecov-action@v1
         with:
           file:  ./src/github.com/goharbor/harbor/src/portal/coverage/lcov.info
-          yml: ./src/github.com/goharbor/harbor/.github/codecov-ut-config/codecov.yml
+          flags: unittests

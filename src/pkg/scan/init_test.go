@@ -15,18 +15,21 @@
 package scan
 
 import (
+	"context"
+	"testing"
+
+	"github.com/goharbor/harbor/src/lib/errors"
 	"github.com/goharbor/harbor/src/lib/q"
 	"github.com/goharbor/harbor/src/pkg/scan/dao/scanner"
-	"github.com/goharbor/harbor/src/pkg/scan/scanner/mocks"
-	"github.com/pkg/errors"
+	"github.com/goharbor/harbor/src/testing/mock"
+	mocks "github.com/goharbor/harbor/src/testing/pkg/scan/scanner"
 	"github.com/stretchr/testify/assert"
-	"testing"
 )
 
 func TestEnsureScanners(t *testing.T) {
 
 	t.Run("Should do nothing when list of wanted scanners is empty", func(t *testing.T) {
-		err := EnsureScanners([]scanner.Registration{})
+		err := EnsureScanners(context.TODO(), []scanner.Registration{})
 		assert.NoError(t, err)
 	})
 
@@ -34,14 +37,14 @@ func TestEnsureScanners(t *testing.T) {
 		mgr := &mocks.Manager{}
 		scannerManager = mgr
 
-		mgr.On("List", &q.Query{
+		mgr.On("List", mock.Anything, &q.Query{
 			Keywords: map[string]interface{}{
-				"ex_url__in": []string{"http://scanner:8080"},
+				"name__in": []string{"scanner"},
 			},
 		}).Return(nil, errors.New("DB error"))
 
-		err := EnsureScanners([]scanner.Registration{
-			{URL: "http://scanner:8080"},
+		err := EnsureScanners(context.TODO(), []scanner.Registration{
+			{Name: "scanner", URL: "http://scanner:8080"},
 		})
 
 		assert.EqualError(t, err, "listing scanners: DB error")
@@ -52,23 +55,46 @@ func TestEnsureScanners(t *testing.T) {
 		mgr := &mocks.Manager{}
 		scannerManager = mgr
 
-		mgr.On("List", &q.Query{
+		mgr.On("List", mock.Anything, &q.Query{
 			Keywords: map[string]interface{}{
-				"ex_url__in": []string{
-					"http://trivy:8080",
-					"http://clair:8080",
+				"name__in": []string{
+					"trivy",
+				},
+			},
+		}).Return([]*scanner.Registration{}, nil)
+		mgr.On("Create", mock.Anything, &scanner.Registration{
+			Name: "trivy",
+			URL:  "http://trivy:8080",
+		}).Return("uuid-trivy", nil)
+
+		err := EnsureScanners(context.TODO(), []scanner.Registration{
+			{Name: "trivy", URL: "http://trivy:8080"},
+		})
+
+		assert.NoError(t, err)
+		mgr.AssertExpectations(t)
+	})
+
+	t.Run("Should update scanners", func(t *testing.T) {
+		mgr := &mocks.Manager{}
+		scannerManager = mgr
+
+		mgr.On("List", mock.Anything, &q.Query{
+			Keywords: map[string]interface{}{
+				"name__in": []string{
+					"trivy",
 				},
 			},
 		}).Return([]*scanner.Registration{
-			{URL: "http://clair:8080"},
+			{Name: "trivy", URL: "http://trivy:8080"},
 		}, nil)
-		mgr.On("Create", &scanner.Registration{
-			URL: "http://trivy:8080",
-		}).Return("uuid-trivy", nil)
+		mgr.On("Update", mock.Anything, &scanner.Registration{
+			Name: "trivy",
+			URL:  "http://trivy:8443",
+		}).Return(nil)
 
-		err := EnsureScanners([]scanner.Registration{
-			{URL: "http://trivy:8080"},
-			{URL: "http://clair:8080"},
+		err := EnsureScanners(context.TODO(), []scanner.Registration{
+			{Name: "trivy", URL: "http://trivy:8443"},
 		})
 
 		assert.NoError(t, err)
@@ -83,9 +109,9 @@ func TestEnsureDefaultScanner(t *testing.T) {
 		mgr := &mocks.Manager{}
 		scannerManager = mgr
 
-		mgr.On("GetDefault").Return(nil, errors.New("DB error"))
+		mgr.On("GetDefault", mock.Anything).Return(nil, errors.New("DB error"))
 
-		err := EnsureDefaultScanner("http://trivy:8080")
+		err := EnsureDefaultScanner(context.TODO(), "trivy")
 		assert.EqualError(t, err, "getting default scanner: DB error")
 		mgr.AssertExpectations(t)
 	})
@@ -94,11 +120,11 @@ func TestEnsureDefaultScanner(t *testing.T) {
 		mgr := &mocks.Manager{}
 		scannerManager = mgr
 
-		mgr.On("GetDefault").Return(&scanner.Registration{
-			URL: "http://trivy:8080",
+		mgr.On("GetDefault", mock.Anything).Return(&scanner.Registration{
+			Name: "trivy",
 		}, nil)
 
-		err := EnsureDefaultScanner("http://trivy:8080")
+		err := EnsureDefaultScanner(context.TODO(), "trivy")
 		assert.NoError(t, err)
 		mgr.AssertExpectations(t)
 	})
@@ -107,12 +133,12 @@ func TestEnsureDefaultScanner(t *testing.T) {
 		mgr := &mocks.Manager{}
 		scannerManager = mgr
 
-		mgr.On("GetDefault").Return(nil, nil)
-		mgr.On("List", &q.Query{
-			Keywords: map[string]interface{}{"url": "http://trivy:8080"},
+		mgr.On("GetDefault", mock.Anything).Return(nil, nil)
+		mgr.On("List", mock.Anything, &q.Query{
+			Keywords: map[string]interface{}{"name": "trivy"},
 		}).Return(nil, errors.New("DB error"))
 
-		err := EnsureDefaultScanner("http://trivy:8080")
+		err := EnsureDefaultScanner(context.TODO(), "trivy")
 		assert.EqualError(t, err, "listing scanners: DB error")
 		mgr.AssertExpectations(t)
 	})
@@ -121,16 +147,16 @@ func TestEnsureDefaultScanner(t *testing.T) {
 		mgr := &mocks.Manager{}
 		scannerManager = mgr
 
-		mgr.On("GetDefault").Return(nil, nil)
-		mgr.On("List", &q.Query{
-			Keywords: map[string]interface{}{"url": "http://trivy:8080"},
+		mgr.On("GetDefault", mock.Anything).Return(nil, nil)
+		mgr.On("List", mock.Anything, &q.Query{
+			Keywords: map[string]interface{}{"name": "trivy"},
 		}).Return([]*scanner.Registration{
-			{URL: "http://trivy:8080"},
-			{URL: "http://trivy:8080"},
+			{Name: "trivy"},
+			{Name: "trivy"},
 		}, nil)
 
-		err := EnsureDefaultScanner("http://trivy:8080")
-		assert.EqualError(t, err, "expected only one scanner with URL http://trivy:8080 but got 2")
+		err := EnsureDefaultScanner(context.TODO(), "trivy")
+		assert.EqualError(t, err, "expected only one scanner with name trivy but got 2")
 		mgr.AssertExpectations(t)
 	})
 
@@ -138,18 +164,19 @@ func TestEnsureDefaultScanner(t *testing.T) {
 		mgr := &mocks.Manager{}
 		scannerManager = mgr
 
-		mgr.On("GetDefault").Return(nil, nil)
-		mgr.On("List", &q.Query{
-			Keywords: map[string]interface{}{"url": "http://trivy:8080"},
+		mgr.On("GetDefault", mock.Anything).Return(nil, nil)
+		mgr.On("List", mock.Anything, &q.Query{
+			Keywords: map[string]interface{}{"name": "trivy"},
 		}).Return([]*scanner.Registration{
 			{
+				Name: "trivy",
 				UUID: "trivy-uuid",
 				URL:  "http://trivy:8080",
 			},
 		}, nil)
-		mgr.On("SetAsDefault", "trivy-uuid").Return(nil)
+		mgr.On("SetAsDefault", mock.Anything, "trivy-uuid").Return(nil)
 
-		err := EnsureDefaultScanner("http://trivy:8080")
+		err := EnsureDefaultScanner(context.TODO(), "trivy")
 		assert.NoError(t, err)
 		mgr.AssertExpectations(t)
 	})
@@ -158,19 +185,20 @@ func TestEnsureDefaultScanner(t *testing.T) {
 		mgr := &mocks.Manager{}
 		scannerManager = mgr
 
-		mgr.On("GetDefault").Return(nil, nil)
-		mgr.On("List", &q.Query{
-			Keywords: map[string]interface{}{"url": "http://trivy:8080"},
+		mgr.On("GetDefault", mock.Anything).Return(nil, nil)
+		mgr.On("List", mock.Anything, &q.Query{
+			Keywords: map[string]interface{}{"name": "trivy"},
 		}).Return([]*scanner.Registration{
 			{
+				Name: "trivy",
 				UUID: "trivy-uuid",
 				URL:  "http://trivy:8080",
 			},
 		}, nil)
-		mgr.On("SetAsDefault", "trivy-uuid").Return(errors.New("DB error"))
+		mgr.On("SetAsDefault", mock.Anything, "trivy-uuid").Return(errors.New("DB error"))
 
-		err := EnsureDefaultScanner("http://trivy:8080")
-		assert.EqualError(t, err, "setting http://trivy:8080 as default scanner: DB error")
+		err := EnsureDefaultScanner(context.TODO(), "trivy")
+		assert.EqualError(t, err, "setting trivy as default scanner: DB error")
 		mgr.AssertExpectations(t)
 	})
 
@@ -178,11 +206,11 @@ func TestEnsureDefaultScanner(t *testing.T) {
 
 func TestRemoveImmutableScanners(t *testing.T) {
 
-	t.Run("Should do nothing when list of URLs is empty", func(t *testing.T) {
+	t.Run("Should do nothing when list of names is empty", func(t *testing.T) {
 		mgr := &mocks.Manager{}
 		scannerManager = mgr
 
-		err := RemoveImmutableScanners([]string{})
+		err := RemoveImmutableScanners(context.TODO(), []string{})
 		assert.NoError(t, err)
 		mgr.AssertExpectations(t)
 	})
@@ -191,14 +219,14 @@ func TestRemoveImmutableScanners(t *testing.T) {
 		mgr := &mocks.Manager{}
 		scannerManager = mgr
 
-		mgr.On("List", &q.Query{
+		mgr.On("List", mock.Anything, &q.Query{
 			Keywords: map[string]interface{}{
-				"immutable":  true,
-				"ex_url__in": []string{"http://scanner:8080"},
+				"immutable": true,
+				"name__in":  []string{"scanner"},
 			},
 		}).Return(nil, errors.New("DB error"))
 
-		err := RemoveImmutableScanners([]string{"http://scanner:8080"})
+		err := RemoveImmutableScanners(context.TODO(), []string{"scanner"})
 		assert.EqualError(t, err, "listing scanners: DB error")
 		mgr.AssertExpectations(t)
 	})
@@ -209,29 +237,31 @@ func TestRemoveImmutableScanners(t *testing.T) {
 
 		registrations := []*scanner.Registration{
 			{
+				Name: "scanner-1",
 				UUID: "uuid-1",
 				URL:  "http://scanner-1",
 			},
 			{
+				Name: "scanner-2",
 				UUID: "uuid-2",
 				URL:  "http://scanner-2",
 			}}
 
-		mgr.On("List", &q.Query{
+		mgr.On("List", mock.Anything, &q.Query{
 			Keywords: map[string]interface{}{
 				"immutable": true,
-				"ex_url__in": []string{
-					"http://scanner-1",
-					"http://scanner-2",
+				"name__in": []string{
+					"scanner-1",
+					"scanner-2",
 				},
 			},
 		}).Return(registrations, nil)
-		mgr.On("Delete", "uuid-1").Return(nil)
-		mgr.On("Delete", "uuid-2").Return(nil)
+		mgr.On("Delete", mock.Anything, "uuid-1").Return(nil)
+		mgr.On("Delete", mock.Anything, "uuid-2").Return(nil)
 
-		err := RemoveImmutableScanners([]string{
-			"http://scanner-1",
-			"http://scanner-2",
+		err := RemoveImmutableScanners(context.TODO(), []string{
+			"scanner-1",
+			"scanner-2",
 		})
 		assert.NoError(t, err)
 		mgr.AssertExpectations(t)
@@ -243,29 +273,31 @@ func TestRemoveImmutableScanners(t *testing.T) {
 
 		registrations := []*scanner.Registration{
 			{
+				Name: "scanner-1",
 				UUID: "uuid-1",
 				URL:  "http://scanner-1",
 			},
 			{
+				Name: "scanner-2",
 				UUID: "uuid-2",
 				URL:  "http://scanner-2",
 			}}
 
-		mgr.On("List", &q.Query{
+		mgr.On("List", mock.Anything, &q.Query{
 			Keywords: map[string]interface{}{
 				"immutable": true,
-				"ex_url__in": []string{
-					"http://scanner-1",
-					"http://scanner-2",
+				"name__in": []string{
+					"scanner-1",
+					"scanner-2",
 				},
 			},
 		}).Return(registrations, nil)
-		mgr.On("Delete", "uuid-1").Return(nil)
-		mgr.On("Delete", "uuid-2").Return(errors.New("DB error"))
+		mgr.On("Delete", mock.Anything, "uuid-1").Return(nil)
+		mgr.On("Delete", mock.Anything, "uuid-2").Return(errors.New("DB error"))
 
-		err := RemoveImmutableScanners([]string{
-			"http://scanner-1",
-			"http://scanner-2",
+		err := RemoveImmutableScanners(context.TODO(), []string{
+			"scanner-1",
+			"scanner-2",
 		})
 		assert.EqualError(t, err, "deleting scanner: uuid-2: DB error")
 		mgr.AssertExpectations(t)

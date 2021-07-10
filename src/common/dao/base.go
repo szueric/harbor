@@ -17,8 +17,8 @@ package dao
 import (
 	"errors"
 	"fmt"
+	proModels "github.com/goharbor/harbor/src/pkg/project/models"
 	"strconv"
-	"strings"
 	"sync"
 
 	"github.com/astaxie/beego/orm"
@@ -29,8 +29,6 @@ import (
 const (
 	// NonExistUserID : if a user does not exist, the ID of the user will be 0.
 	NonExistUserID = 0
-	// ClairDBAlias ...
-	ClairDBAlias = "clair-db"
 )
 
 // ErrDupRows is returned by DAO when inserting failed with error "duplicate key value violates unique constraint"
@@ -46,23 +44,6 @@ type Database interface {
 	Register(alias ...string) error
 	// UpgradeSchema upgrades the DB schema to the latest version
 	UpgradeSchema() error
-}
-
-// InitClairDB ...
-func InitClairDB(clairDB *models.PostGreSQL) error {
-	p := &pgsql{
-		host:     clairDB.Host,
-		port:     strconv.Itoa(clairDB.Port),
-		usr:      clairDB.Username,
-		pwd:      clairDB.Password,
-		database: clairDB.Database,
-		sslmode:  clairDB.SSLMode,
-	}
-	if err := p.Register(ClairDBAlias); err != nil {
-		return err
-	}
-	log.Info("initialized clair database")
-	return nil
 }
 
 // UpgradeSchema will call the internal migrator to upgrade schema based on the setting of database.
@@ -123,21 +104,18 @@ func GetOrmer() orm.Ormer {
 	return globalOrm
 }
 
-// IsDupRecErr checks if the error is due to a duplication of record, currently this
-// works only for pgSQL
-func IsDupRecErr(e error) bool {
-	return strings.Contains(e.Error(), "duplicate key value violates unique constraint")
-}
-
 // ClearTable is the shortcut for test cases, it should be called only in test cases.
 func ClearTable(table string) error {
 	o := GetOrmer()
 	sql := fmt.Sprintf("delete from %s where 1=1", table)
-	if table == models.ProjectTable {
+	if table == proModels.ProjectTable {
 		sql = fmt.Sprintf("delete from %s where project_id > 1", table)
 	}
 	if table == models.UserTable {
 		sql = fmt.Sprintf("delete from %s where user_id > 2", table)
+	}
+	if table == "project_member" { // make sure admin in library
+		sql = fmt.Sprintf("delete from %s where id > 1", table)
 	}
 	if table == "project_metadata" { // make sure library is public
 		sql = fmt.Sprintf("delete from %s where id > 1", table)
@@ -146,52 +124,23 @@ func ClearTable(table string) error {
 	return err
 }
 
-// PaginateForRawSQL ...
-func PaginateForRawSQL(sql string, limit, offset int64) string {
-	return fmt.Sprintf("%s limit %d offset %d", sql, limit, offset)
+// implements github.com/golang-migrate/migrate/v4.Logger
+type mLogger struct {
+	logger *log.Logger
 }
 
-// PaginateForQuerySetter ...
-func PaginateForQuerySetter(qs orm.QuerySeter, page, size int64) orm.QuerySeter {
-	if size > 0 {
-		qs = qs.Limit(size)
-		if page > 0 {
-			qs = qs.Offset((page - 1) * size)
-		}
+func newMigrateLogger() *mLogger {
+	return &mLogger{
+		logger: log.DefaultLogger().WithDepth(5),
 	}
-	return qs
 }
 
-// Escape ..
-func Escape(str string) string {
-	str = strings.Replace(str, `\`, `\\`, -1)
-	str = strings.Replace(str, `%`, `\%`, -1)
-	str = strings.Replace(str, `_`, `\_`, -1)
-	return str
+// Verbose ...
+func (l *mLogger) Verbose() bool {
+	return l.logger.GetLevel() <= log.DebugLevel
 }
 
-// WithTransaction helper for transaction
-func WithTransaction(handler func(o orm.Ormer) error) error {
-	o := orm.NewOrm()
-
-	if err := o.Begin(); err != nil {
-		log.Errorf("begin transaction failed: %v", err)
-		return err
-	}
-
-	if err := handler(o); err != nil {
-		if e := o.Rollback(); e != nil {
-			log.Errorf("rollback transaction failed: %v", e)
-			return e
-		}
-
-		return err
-	}
-
-	if err := o.Commit(); err != nil {
-		log.Errorf("commit transaction failed: %v", err)
-		return err
-	}
-
-	return nil
+// Printf ...
+func (l *mLogger) Printf(format string, v ...interface{}) {
+	l.logger.Infof(format, v...)
 }

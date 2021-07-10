@@ -19,10 +19,14 @@ import (
 	"fmt"
 	beegoorm "github.com/astaxie/beego/orm"
 	common_dao "github.com/goharbor/harbor/src/common/dao"
-	"github.com/goharbor/harbor/src/common/models"
 	"github.com/goharbor/harbor/src/lib/errors"
 	"github.com/goharbor/harbor/src/lib/orm"
 	"github.com/goharbor/harbor/src/lib/q"
+	af_dao "github.com/goharbor/harbor/src/pkg/artifact/dao"
+	"github.com/goharbor/harbor/src/pkg/repository/model"
+	tag_dao "github.com/goharbor/harbor/src/pkg/tag/dao"
+	"github.com/goharbor/harbor/src/pkg/tag/model/tag"
+	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/stretchr/testify/suite"
 	"testing"
 	"time"
@@ -34,19 +38,23 @@ var (
 
 type daoTestSuite struct {
 	suite.Suite
-	dao DAO
-	id  int64
-	ctx context.Context
+	dao    DAO
+	tagDao tag_dao.DAO
+	afDao  af_dao.DAO
+	id     int64
+	ctx    context.Context
 }
 
 func (d *daoTestSuite) SetupSuite() {
 	d.dao = New()
+	d.tagDao = tag_dao.New()
+	d.afDao = af_dao.New()
 	common_dao.PrepareTestForPostgresSQL()
 	d.ctx = orm.NewContext(nil, beegoorm.NewOrm())
 }
 
 func (d *daoTestSuite) SetupTest() {
-	repository := &models.RepoRecord{
+	repository := &model.RepoRecord{
 		Name:        repository,
 		ProjectID:   1,
 		Description: "",
@@ -118,7 +126,7 @@ func (d *daoTestSuite) TestCreate() {
 	// the happy pass case is covered in Setup
 
 	// conflict
-	repository := &models.RepoRecord{
+	repository := &model.RepoRecord{
 		Name:      repository,
 		ProjectID: 1,
 	}
@@ -140,7 +148,7 @@ func (d *daoTestSuite) TestDelete() {
 
 func (d *daoTestSuite) TestUpdate() {
 	// pass
-	err := d.dao.Update(d.ctx, &models.RepoRecord{
+	err := d.dao.Update(d.ctx, &model.RepoRecord{
 		RepositoryID: d.id,
 		PullCount:    1,
 	}, "PullCount")
@@ -152,7 +160,7 @@ func (d *daoTestSuite) TestUpdate() {
 	d.Equal(int64(1), repository.PullCount)
 
 	// not exist
-	err = d.dao.Update(d.ctx, &models.RepoRecord{
+	err = d.dao.Update(d.ctx, &model.RepoRecord{
 		RepositoryID: 10000,
 	})
 	d.Require().NotNil(err)
@@ -162,7 +170,7 @@ func (d *daoTestSuite) TestUpdate() {
 }
 
 func (d *daoTestSuite) TestAddPullCount() {
-	repository := &models.RepoRecord{
+	repository := &model.RepoRecord{
 		Name:        "test/pullcount",
 		ProjectID:   10,
 		Description: "test pull count",
@@ -180,6 +188,72 @@ func (d *daoTestSuite) TestAddPullCount() {
 	d.Equal(int64(2), repository.PullCount)
 
 	d.dao.Delete(d.ctx, id)
+}
+
+func (d *daoTestSuite) TestNonEmptyRepos() {
+	repository := &model.RepoRecord{
+		Name:        "TestNonEmptyRepos",
+		ProjectID:   10,
+		Description: "test pull count",
+		PullCount:   1,
+	}
+	id, err := d.dao.Create(d.ctx, repository)
+	d.Require().Nil(err)
+
+	art := &af_dao.Artifact{
+		Type:              "IMAGE",
+		MediaType:         v1.MediaTypeImageConfig,
+		ManifestMediaType: v1.MediaTypeImageIndex,
+		ProjectID:         1,
+		RepositoryID:      1,
+		RepositoryName:    "library/hello-world",
+		Digest:            "parent_digest",
+		PushTime:          time.Now(),
+		PullTime:          time.Now(),
+		Annotations:       `{"anno1":"value1"}`,
+	}
+	afID, err := d.afDao.Create(d.ctx, art)
+	d.Require().Nil(err)
+
+	// Same repository with two tags, the result should only contain one repository record.
+	tag1 := &tag.Tag{
+		RepositoryID: id,
+		ArtifactID:   afID,
+		Name:         "tag1",
+		PushTime:     time.Now(),
+		PullTime:     time.Now(),
+	}
+	_, err = d.tagDao.Create(d.ctx, tag1)
+	d.Require().Nil(err)
+	tag2 := &tag.Tag{
+		RepositoryID: id,
+		ArtifactID:   afID,
+		Name:         "tag2",
+		PushTime:     time.Now(),
+		PullTime:     time.Now(),
+	}
+	_, err = d.tagDao.Create(d.ctx, tag2)
+	d.Require().Nil(err)
+
+	repos, err := d.dao.NonEmptyRepos(d.ctx)
+	d.Require().Nil(err)
+
+	var success bool
+	var count int
+	for _, repo := range repos {
+		if repo.Name == "TestNonEmptyRepos" {
+			success = true
+			count++
+		}
+	}
+	if !success {
+		d.Fail("TestNonEmptyRepos failure: no NonEmpty repository found")
+	}
+
+	if count != 1 {
+		d.Fail("TestNonEmptyRepos failure: duplicate repository record")
+	}
+
 }
 
 func TestDaoTestSuite(t *testing.T) {

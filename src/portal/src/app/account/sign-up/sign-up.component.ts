@@ -11,15 +11,13 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-import { Component, Output, ViewChild, EventEmitter } from '@angular/core';
-import { Modal } from '../../../lib/services/interface';
-
-import { NewUserFormComponent } from '../../shared/new-user-form/new-user-form.component';
-import { User } from '../../user/user';
-import { SessionService } from '../../shared/session.service';
-import { UserService } from '../../user/user.service';
-import { InlineAlertComponent } from '../../shared/inline-alert/inline-alert.component';
-
+import { Component, EventEmitter, Output, ViewChild } from '@angular/core';
+import { Modal } from '../../shared/services';
+import { NewUserFormComponent } from '../../shared/components/new-user-form/new-user-form.component';
+import { User } from '../../base/left-side-nav/user/user';
+import { SessionService } from '../../shared/services/session.service';
+import { UserService } from '../../base/left-side-nav/user/user.service';
+import { InlineAlertComponent } from "../../shared/components/inline-alert/inline-alert.component";
 
 @Component({
     selector: 'sign-up',
@@ -42,10 +40,10 @@ export class SignUpComponent {
     @ViewChild(NewUserFormComponent, {static: true})
     newUserForm: NewUserFormComponent;
 
-    @ViewChild(InlineAlertComponent, {static: false})
+    @ViewChild(InlineAlertComponent)
     inlineAlert: InlineAlertComponent;
 
-    @ViewChild(Modal, {static: false})
+    @ViewChild(Modal)
     modal: Modal;
 
     getNewUser(): User {

@@ -15,39 +15,50 @@
 package main
 
 import (
+	"context"
 	"encoding/gob"
 	"fmt"
+	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
+	configCtl "github.com/goharbor/harbor/src/controller/config"
+
 	"github.com/astaxie/beego"
 	_ "github.com/astaxie/beego/session/redis"
+	_ "github.com/astaxie/beego/session/redis_sentinel"
 	"github.com/goharbor/harbor/src/common/dao"
 	common_http "github.com/goharbor/harbor/src/common/http"
-	"github.com/goharbor/harbor/src/common/job"
 	"github.com/goharbor/harbor/src/common/models"
-	"github.com/goharbor/harbor/src/common/utils"
 	_ "github.com/goharbor/harbor/src/controller/event/handler"
+	"github.com/goharbor/harbor/src/controller/health"
+	"github.com/goharbor/harbor/src/controller/registry"
 	"github.com/goharbor/harbor/src/core/api"
 	_ "github.com/goharbor/harbor/src/core/auth/authproxy"
 	_ "github.com/goharbor/harbor/src/core/auth/db"
 	_ "github.com/goharbor/harbor/src/core/auth/ldap"
 	_ "github.com/goharbor/harbor/src/core/auth/oidc"
 	_ "github.com/goharbor/harbor/src/core/auth/uaa"
-	"github.com/goharbor/harbor/src/core/config"
 	"github.com/goharbor/harbor/src/core/middlewares"
 	"github.com/goharbor/harbor/src/core/service/token"
+	"github.com/goharbor/harbor/src/lib/cache"
+	_ "github.com/goharbor/harbor/src/lib/cache/memory" // memory cache
+	_ "github.com/goharbor/harbor/src/lib/cache/redis"  // redis cache
+	"github.com/goharbor/harbor/src/lib/config"
 	"github.com/goharbor/harbor/src/lib/log"
+	"github.com/goharbor/harbor/src/lib/metric"
+	"github.com/goharbor/harbor/src/lib/orm"
 	"github.com/goharbor/harbor/src/migration"
 	"github.com/goharbor/harbor/src/pkg/notification"
 	_ "github.com/goharbor/harbor/src/pkg/notifier/topic"
 	"github.com/goharbor/harbor/src/pkg/scan"
 	"github.com/goharbor/harbor/src/pkg/scan/dao/scanner"
-	"github.com/goharbor/harbor/src/pkg/scheduler"
+	pkguser "github.com/goharbor/harbor/src/pkg/user"
 	"github.com/goharbor/harbor/src/pkg/version"
-	"github.com/goharbor/harbor/src/replication"
 	"github.com/goharbor/harbor/src/server"
 )
 
@@ -55,23 +66,16 @@ const (
 	adminUserID = 1
 )
 
-func updateInitPassword(userID int, password string) error {
-	queryUser := models.User{UserID: userID}
-	user, err := dao.GetUser(queryUser)
+func updateInitPassword(ctx context.Context, userID int, password string) error {
+	userMgr := pkguser.Mgr
+	user, err := userMgr.Get(ctx, userID)
 	if err != nil {
-		return fmt.Errorf("Failed to get user, userID: %d %v", userID, err)
-	}
-	if user == nil {
-		return fmt.Errorf("user id: %d does not exist", userID)
+		return fmt.Errorf("failed to get user, userID: %d %v", userID, err)
 	}
 	if user.Salt == "" {
-		salt := utils.GenerateRandomString()
-
-		user.Salt = salt
-		user.Password = password
-		err = dao.ChangeUserPassword(*user)
+		err = userMgr.UpdatePassword(ctx, userID, password)
 		if err != nil {
-			return fmt.Errorf("Failed to update user encrypted password, userID: %d, err: %v", userID, err)
+			return fmt.Errorf("failed to update user encrypted password, userID: %d, err: %v", userID, err)
 		}
 
 		log.Infof("User id: %d updated its encrypted password successfully.", userID)
@@ -99,17 +103,77 @@ func main() {
 	beego.BConfig.WebConfig.Session.SessionOn = true
 	beego.BConfig.WebConfig.Session.SessionName = config.SessionCookieName
 
-	redisURL := os.Getenv("_REDIS_URL")
+	redisURL := os.Getenv("_REDIS_URL_CORE")
 	if len(redisURL) > 0 {
+		u, err := url.Parse(redisURL)
+		if err != nil {
+			panic("bad _REDIS_URL:" + redisURL)
+		}
 		gob.Register(models.User{})
-		beego.BConfig.WebConfig.Session.SessionProvider = "redis"
-		beego.BConfig.WebConfig.Session.SessionProviderConfig = redisURL
+		if u.Scheme == "redis+sentinel" {
+			ps := strings.Split(u.Path, "/")
+			if len(ps) < 2 {
+				panic("bad redis sentinel url: no master name")
+			}
+			ss := make([]string, 5)
+			ss[0] = strings.Join(strings.Split(u.Host, ","), ";") // host
+			ss[1] = "100"                                         // pool
+			if u.User != nil {
+				password, isSet := u.User.Password()
+				if isSet {
+					ss[2] = password
+				}
+			}
+			if len(ps) > 2 {
+				db, err := strconv.Atoi(ps[2])
+				if err != nil {
+					panic("bad redis sentinel url: bad db")
+				}
+				if db != 0 {
+					ss[3] = ps[2]
+				}
+			}
+			ss[4] = ps[1] // monitor name
+
+			beego.BConfig.WebConfig.Session.SessionProvider = "redis_sentinel"
+			beego.BConfig.WebConfig.Session.SessionProviderConfig = strings.Join(ss, ",")
+		} else {
+			ss := make([]string, 5)
+			ss[0] = u.Host // host
+			ss[1] = "100"  // pool
+			if u.User != nil {
+				password, isSet := u.User.Password()
+				if isSet {
+					ss[2] = password
+				}
+			}
+			if len(u.Path) > 1 {
+				if _, err := strconv.Atoi(u.Path[1:]); err != nil {
+					panic("bad redis url: bad db")
+				}
+				ss[3] = u.Path[1:]
+			}
+			ss[4] = u.Query().Get("idle_timeout_seconds")
+
+			beego.BConfig.WebConfig.Session.SessionProvider = "redis"
+			beego.BConfig.WebConfig.Session.SessionProviderConfig = strings.Join(ss, ",")
+		}
+
+		log.Info("initializing cache ...")
+		if err := cache.Initialize(u.Scheme, redisURL); err != nil {
+			log.Fatalf("failed to initialize cache: %v", err)
+		}
 	}
 	beego.AddTemplateExt("htm")
 
 	log.Info("initializing configurations...")
 	config.Init()
 	log.Info("configurations initialization completed")
+	metricCfg := config.Metric()
+	if metricCfg.Enabled {
+		metric.RegisterCollectors()
+		go metric.ServeProm(metricCfg.Path, metricCfg.Port)
+	}
 	token.InitCreators()
 	database, err := config.Database()
 	if err != nil {
@@ -121,20 +185,18 @@ func main() {
 	if err = migration.Migrate(database); err != nil {
 		log.Fatalf("failed to migrate: %v", err)
 	}
-	if err := config.Load(); err != nil {
+	ctx := orm.Context()
+	if err := config.Load(ctx); err != nil {
 		log.Fatalf("failed to load config: %v", err)
 	}
-
-	// init the jobservice client
-	job.Init()
-	// init the scheduler
-	scheduler.Init()
-
+	if err := configCtl.Ctl.OverwriteConfig(ctx); err != nil {
+		log.Fatalf("failed to init config from CONFIG_OVERWRITE_JSON, error %v", err)
+	}
 	password, err := config.InitialAdminPassword()
 	if err != nil {
 		log.Fatalf("failed to get admin's initial password: %v", err)
 	}
-	if err := updateInitPassword(adminUserID, password); err != nil {
+	if err := updateInitPassword(ctx, adminUserID, password); err != nil {
 		log.Error(err)
 	}
 
@@ -143,14 +205,14 @@ func main() {
 		log.Fatalf("Failed to initialize API handlers with error: %s", err.Error())
 	}
 
-	registerScanners()
+	health.RegisterHealthCheckers()
+	registerScanners(orm.Context())
 
 	closing := make(chan struct{})
 	done := make(chan struct{})
 	go gracefulShutdown(closing, done)
-	if err := replication.Init(closing, done); err != nil {
-		log.Fatalf("failed to init for replication: %v", err)
-	}
+	// Start health checker for registries
+	go registry.Ctl.StartRegularHealthCheck(orm.Context(), closing, done)
 
 	log.Info("initializing notification...")
 	notification.Init()
@@ -163,24 +225,30 @@ func main() {
 		iTLSCertPath := os.Getenv("INTERNAL_TLS_CERT_PATH")
 
 		log.Infof("load client key: %s client cert: %s", iTLSKeyPath, iTLSCertPath)
+		beego.BConfig.Listen.EnableHTTP = false
 		beego.BConfig.Listen.EnableHTTPS = true
 		beego.BConfig.Listen.HTTPSPort = 8443
 		beego.BConfig.Listen.HTTPSKeyFile = iTLSKeyPath
 		beego.BConfig.Listen.HTTPSCertFile = iTLSCertPath
+		beego.BeeApp.Server.TLSConfig = common_http.NewServerTLSConfig()
 	}
 
 	log.Infof("Version: %s, Git commit: %s", version.ReleaseVersion, version.GitCommit)
 	beego.RunWithMiddleWares("", middlewares.MiddleWares()...)
 }
 
-func registerScanners() {
+const (
+	trivyScanner = "Trivy"
+)
+
+func registerScanners(ctx context.Context) {
 	wantedScanners := make([]scanner.Registration, 0)
-	uninstallURLs := make([]string, 0)
+	uninstallScannerNames := make([]string, 0)
 
 	if config.WithTrivy() {
 		log.Info("Registering Trivy scanner")
 		wantedScanners = append(wantedScanners, scanner.Registration{
-			Name:            "Trivy",
+			Name:            trivyScanner,
 			Description:     "The Trivy scanner adapter",
 			URL:             config.TrivyAdapterURL(),
 			UseInternalAddr: true,
@@ -188,54 +256,28 @@ func registerScanners() {
 		})
 	} else {
 		log.Info("Removing Trivy scanner")
-		uninstallURLs = append(uninstallURLs, config.TrivyAdapterURL())
+		uninstallScannerNames = append(uninstallScannerNames, trivyScanner)
 	}
 
-	if config.WithClair() {
-		clairDB, err := config.ClairDB()
-		if err != nil {
-			log.Fatalf("failed to load clair database information: %v", err)
-		}
-		if err := dao.InitClairDB(clairDB); err != nil {
-			log.Fatalf("failed to initialize clair database: %v", err)
-		}
-
-		log.Info("Registering Clair scanner")
-		wantedScanners = append(wantedScanners, scanner.Registration{
-			Name:            "Clair",
-			Description:     "The Clair scanner adapter",
-			URL:             config.ClairAdapterEndpoint(),
-			UseInternalAddr: true,
-			Immutable:       true,
-		})
-	} else {
-		log.Info("Removing Clair scanner")
-		uninstallURLs = append(uninstallURLs, config.ClairAdapterEndpoint())
-	}
-
-	if err := scan.EnsureScanners(wantedScanners); err != nil {
-		log.Fatalf("failed to register scanners: %v", err)
-	}
-
-	if defaultScannerURL := getDefaultScannerURL(); defaultScannerURL != "" {
-		log.Infof("Setting %s as default scanner", defaultScannerURL)
-		if err := scan.EnsureDefaultScanner(defaultScannerURL); err != nil {
-			log.Fatalf("failed to set default scanner: %v", err)
-		}
-	}
-
-	if err := scan.RemoveImmutableScanners(uninstallURLs); err != nil {
+	if err := scan.RemoveImmutableScanners(ctx, uninstallScannerNames); err != nil {
 		log.Warningf("failed to remove scanners: %v", err)
 	}
 
+	if err := scan.EnsureScanners(ctx, wantedScanners); err != nil {
+		log.Fatalf("failed to register scanners: %v", err)
+	}
+
+	if defaultScannerName := getDefaultScannerName(); defaultScannerName != "" {
+		log.Infof("Setting %s as default scanner", defaultScannerName)
+		if err := scan.EnsureDefaultScanner(ctx, defaultScannerName); err != nil {
+			log.Fatalf("failed to set default scanner: %v", err)
+		}
+	}
 }
 
-func getDefaultScannerURL() string {
+func getDefaultScannerName() string {
 	if config.WithTrivy() {
-		return config.TrivyAdapterURL()
-	}
-	if config.WithClair() {
-		return config.ClairAdapterEndpoint()
+		return trivyScanner
 	}
 	return ""
 }

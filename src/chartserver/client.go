@@ -11,11 +11,11 @@ import (
 	"time"
 
 	commonhttp "github.com/goharbor/harbor/src/common/http"
-	"github.com/pkg/errors"
+	"github.com/goharbor/harbor/src/lib/errors"
 )
 
 const (
-	clientTimeout         = 10 * time.Second
+	clientTimeout         = 30 * time.Second
 	maxIdleConnections    = 10
 	idleConnectionTimeout = 30 * time.Second
 )

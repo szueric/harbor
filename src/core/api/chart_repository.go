@@ -15,17 +15,18 @@ import (
 	"strings"
 	"time"
 
-	"github.com/goharbor/harbor/src/controller/event/metadata"
-
 	"github.com/goharbor/harbor/src/chartserver"
 	"github.com/goharbor/harbor/src/common"
 	"github.com/goharbor/harbor/src/common/rbac"
-	"github.com/goharbor/harbor/src/core/config"
+	rep_event "github.com/goharbor/harbor/src/controller/event/handler/replication/event"
+	"github.com/goharbor/harbor/src/controller/event/metadata"
+	"github.com/goharbor/harbor/src/controller/project"
 	"github.com/goharbor/harbor/src/core/label"
+	"github.com/goharbor/harbor/src/lib/config"
 	hlog "github.com/goharbor/harbor/src/lib/log"
+	pkg_label "github.com/goharbor/harbor/src/pkg/label"
 	n_event "github.com/goharbor/harbor/src/pkg/notifier/event"
-	rep_event "github.com/goharbor/harbor/src/replication/event"
-	"github.com/goharbor/harbor/src/replication/model"
+	"github.com/goharbor/harbor/src/pkg/reg/model"
 	"github.com/goharbor/harbor/src/server/middleware/orm"
 )
 
@@ -99,7 +100,9 @@ func (cra *ChartRepositoryAPI) Prepare() {
 	}
 
 	// Init label manager
-	cra.labelManager = &label.BaseManager{}
+	cra.labelManager = &label.BaseManager{
+		LabelMgr: pkg_label.Mgr,
+	}
 }
 
 func (cra *ChartRepositoryAPI) requireAccess(action rbac.Action, subresource ...rbac.Resource) bool {
@@ -114,7 +117,7 @@ func (cra *ChartRepositoryAPI) requireAccess(action rbac.Action, subresource ...
 func (cra *ChartRepositoryAPI) GetHealthStatus() {
 	// Check access
 	if !cra.SecurityCtx.IsAuthenticated() {
-		cra.SendUnAuthorizedError(errors.New("Unauthorized"))
+		cra.SendUnAuthorizedError(errors.New("unauthorized"))
 		return
 	}
 
@@ -142,7 +145,7 @@ func (cra *ChartRepositoryAPI) GetIndexByRepo() {
 func (cra *ChartRepositoryAPI) GetIndex() {
 	// Check access
 	if !cra.SecurityCtx.IsAuthenticated() {
-		cra.SendUnAuthorizedError(errors.New("Unauthorized"))
+		cra.SendUnAuthorizedError(errors.New("unauthorized"))
 		return
 	}
 
@@ -151,14 +154,14 @@ func (cra *ChartRepositoryAPI) GetIndex() {
 		return
 	}
 
-	results, err := cra.ProjectMgr.List(nil)
+	projects, err := cra.ProjectCtl.List(cra.Context(), nil, project.Metadata(false))
 	if err != nil {
 		cra.SendInternalServerError(err)
 		return
 	}
 
 	namespaces := []string{}
-	for _, r := range results.Projects {
+	for _, r := range projects {
 		namespaces = append(namespaces, r.Name)
 	}
 
@@ -377,8 +380,8 @@ func (cra *ChartRepositoryAPI) DeleteChart() {
 
 	versions := []string{}
 	for _, chartVersion := range chartVersions {
-		versions = append(versions, chartVersion.GetVersion())
-		if err := cra.removeLabelsFromChart(chartName, chartVersion.GetVersion()); err != nil {
+		versions = append(versions, chartVersion.Version)
+		if err := cra.removeLabelsFromChart(chartName, chartVersion.Version); err != nil {
 			cra.SendInternalServerError(err)
 			return
 		}
@@ -433,7 +436,7 @@ func (cra *ChartRepositoryAPI) requireNamespace(namespace string) bool {
 		return false
 	}
 
-	existing, err := cra.ProjectMgr.Exists(namespace)
+	existing, err := cra.ProjectCtl.Exists(cra.Context(), namespace)
 	if err != nil {
 		// Check failed with error
 		cra.SendInternalServerError(fmt.Errorf("failed to check existence of namespace %s with error: %s", namespace, err.Error()))
@@ -442,7 +445,7 @@ func (cra *ChartRepositoryAPI) requireNamespace(namespace string) bool {
 
 	// Not existing
 	if !existing {
-		cra.SendBadRequestError(fmt.Errorf("namespace %s is not existing", namespace))
+		cra.handleProjectNotFound(namespace)
 		return false
 	}
 
@@ -491,11 +494,16 @@ func (cra *ChartRepositoryAPI) addEventContext(files []formFile, request *http.R
 			extInfo["projectName"] = cra.namespace
 			extInfo["chartName"] = chartDetails.Metadata.Name
 
-			public, err := cra.ProjectMgr.IsPublic(cra.namespace)
+			var public bool
+
+			project, err := cra.ProjectCtl.Get(cra.Context(), cra.namespace)
 			if err != nil {
 				hlog.Errorf("failed to check the public of project %s: %v", cra.namespace, err)
 				public = false
+			} else {
+				public = project.IsPublic()
 			}
+
 			e := &rep_event.Event{
 				Type: rep_event.EventTypeChartUpload,
 				Resource: &model.Resource{
@@ -507,7 +515,11 @@ func (cra *ChartRepositoryAPI) addEventContext(files []formFile, request *http.R
 								"public": strconv.FormatBool(public),
 							},
 						},
-						Vtags: []string{chartDetails.Metadata.Version},
+						Artifacts: []*model.Artifact{
+							{
+								Tags: []string{chartDetails.Metadata.Version},
+							},
+						},
 					},
 					ExtendedInfo: extInfo,
 				},
@@ -558,7 +570,7 @@ func (cra *ChartRepositoryAPI) rewriteFileContent(files []formFile, request *htt
 
 		// Handle error case by case
 		if err != nil {
-			formatedErr := fmt.Errorf("Get file content with multipart header from key '%s' failed with error: %s", f.formField, err.Error())
+			formatedErr := fmt.Errorf("get file content with multipart header from key '%s' failed with error: %s", f.formField, err.Error())
 			if f.mustHave || err != http.ErrMissingFile {
 				return formatedErr
 			}
@@ -570,12 +582,12 @@ func (cra *ChartRepositoryAPI) rewriteFileContent(files []formFile, request *htt
 
 		fw, err := w.CreateFormFile(f.formField, mHeader.Filename)
 		if err != nil {
-			return fmt.Errorf("Create form file with multipart header failed with error: %s", err.Error())
+			return fmt.Errorf("create form file with multipart header failed with error: %s", err.Error())
 		}
 
 		_, err = io.Copy(fw, mFile)
 		if err != nil {
-			return fmt.Errorf("Copy file stream in multipart form data failed with error: %s", err.Error())
+			return fmt.Errorf("copy file stream in multipart form data failed with error: %s", err.Error())
 		}
 
 	}
@@ -591,18 +603,18 @@ func (cra *ChartRepositoryAPI) rewriteFileContent(files []formFile, request *htt
 func initializeChartController() (*chartserver.Controller, error) {
 	addr, err := config.GetChartMuseumEndpoint()
 	if err != nil {
-		return nil, fmt.Errorf("Failed to get the endpoint URL of chart storage server: %s", err.Error())
+		return nil, fmt.Errorf("failed to get the endpoint URL of chart storage server: %s", err.Error())
 	}
 
 	addr = strings.TrimSuffix(addr, "/")
 	url, err := url.Parse(addr)
 	if err != nil {
-		return nil, errors.New("Endpoint URL of chart storage server is malformed")
+		return nil, errors.New("endpoint URL of chart storage server is malformed")
 	}
 
 	controller, err := chartserver.NewController(url, orm.Middleware())
 	if err != nil {
-		return nil, errors.New("Failed to initialize chart API controller")
+		return nil, errors.New("failed to initialize chart API controller")
 	}
 
 	hlog.Debugf("Chart storage server is set to %s", url.String())
@@ -628,17 +640,18 @@ func chartFullName(namespace, chartName, version string) string {
 func parseChartVersionFromFilename(filename string) (string, string) {
 	noExt := strings.TrimSuffix(path.Base(filename), fmt.Sprintf(".%s", chartPackageFileExtension))
 	parts := strings.Split(noExt, "-")
+	lastIndex := len(parts) - 1
 	name := parts[0]
 	version := ""
-	for idx, part := range parts[1:] {
-		if _, err := strconv.Atoi(string(part[0])); err == nil { // see if this part looks like a version (starts w int)
-			version = strings.Join(parts[idx+1:], "-")
+
+	for idx := lastIndex; idx >= 1; idx-- {
+		if _, err := strconv.Atoi(string(parts[idx][0])); err == nil { // see if this part looks like a version (starts w int)
+			version = strings.Join(parts[idx:], "-")
+			name = strings.Join(parts[:idx], "-")
 			break
 		}
-		name = fmt.Sprintf("%s-%s", name, part)
 	}
 	if version == "" { // no parts looked like a real version, just take everything after last hyphen
-		lastIndex := len(parts) - 1
 		name = strings.Join(parts[:lastIndex], "-")
 		version = parts[lastIndex]
 	}

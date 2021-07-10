@@ -16,6 +16,8 @@ package tag
 
 import (
 	"time"
+
+	"github.com/goharbor/harbor/src/lib/q"
 )
 
 // Tag model in database
@@ -26,4 +28,18 @@ type Tag struct {
 	Name         string    `orm:"column(name)" json:"name"`
 	PushTime     time.Time `orm:"column(push_time)" json:"push_time"`
 	PullTime     time.Time `orm:"column(pull_time)" json:"pull_time"`
+}
+
+// GetDefaultSorts specifies the default sorts
+func (t *Tag) GetDefaultSorts() []*q.Sort {
+	return []*q.Sort{
+		{
+			Key:  "PushTime",
+			DESC: true,
+		},
+		{
+			Key:  "ID",
+			DESC: true,
+		},
+	}
 }

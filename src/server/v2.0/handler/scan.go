@@ -23,6 +23,7 @@ import (
 	"github.com/goharbor/harbor/src/controller/artifact"
 	"github.com/goharbor/harbor/src/controller/scan"
 	"github.com/goharbor/harbor/src/lib/errors"
+	"github.com/goharbor/harbor/src/pkg/distribution"
 	operation "github.com/goharbor/harbor/src/server/v2.0/restapi/operations/scan"
 )
 
@@ -48,7 +49,7 @@ func (s *scanAPI) Prepare(ctx context.Context, operation string, params interfac
 }
 
 func (s *scanAPI) ScanArtifact(ctx context.Context, params operation.ScanArtifactParams) middleware.Responder {
-	if err := s.RequireProjectAccess(ctx, params.ProjectName, rbac.ActionRead, rbac.ResourceScan); err != nil {
+	if err := s.RequireProjectAccess(ctx, params.ProjectName, rbac.ActionCreate, rbac.ResourceScan); err != nil {
 		return s.SendError(ctx, err)
 	}
 
@@ -58,7 +59,12 @@ func (s *scanAPI) ScanArtifact(ctx context.Context, params operation.ScanArtifac
 		return s.SendError(ctx, err)
 	}
 
-	if err := s.scanCtl.Scan(ctx, artifact); err != nil {
+	options := []scan.Option{}
+	if !distribution.IsDigest(params.Reference) {
+		options = append(options, scan.WithTag(params.Reference))
+	}
+
+	if err := s.scanCtl.Scan(ctx, artifact, options...); err != nil {
 		return s.SendError(ctx, err)
 	}
 
@@ -76,7 +82,7 @@ func (s *scanAPI) GetReportLog(ctx context.Context, params operation.GetReportLo
 		return s.SendError(ctx, err)
 	}
 
-	bytes, err := s.scanCtl.GetScanLog(params.ReportID)
+	bytes, err := s.scanCtl.GetScanLog(ctx, params.ReportID)
 	if err != nil {
 		return s.SendError(ctx, err)
 	}

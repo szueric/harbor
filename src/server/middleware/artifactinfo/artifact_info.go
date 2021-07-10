@@ -16,6 +16,8 @@ package artifactinfo
 
 import (
 	"fmt"
+	"github.com/docker/distribution/reference"
+	lib_http "github.com/goharbor/harbor/src/lib/http"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -24,8 +26,6 @@ import (
 	"github.com/goharbor/harbor/src/lib"
 	"github.com/goharbor/harbor/src/lib/errors"
 	"github.com/goharbor/harbor/src/lib/log"
-	serror "github.com/goharbor/harbor/src/server/error"
-	"github.com/goharbor/harbor/src/server/middleware"
 	"github.com/opencontainers/go-digest"
 )
 
@@ -39,10 +39,10 @@ const (
 
 var (
 	urlPatterns = map[string]*regexp.Regexp{
-		"manifest":    middleware.V2ManifestURLRe,
-		"tag_list":    middleware.V2TagListURLRe,
-		"blob_upload": middleware.V2BlobUploadURLRe,
-		"blob":        middleware.V2BlobURLRe,
+		"manifest":    lib.V2ManifestURLRe,
+		"tag_list":    lib.V2TagListURLRe,
+		"blob_upload": lib.V2BlobUploadURLRe,
+		"blob":        lib.V2BlobURLRe,
 	}
 )
 
@@ -51,25 +51,29 @@ func Middleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
 			log.Debugf("In artifact info middleware, url: %s", req.URL.String())
-			m, ok := parse(req.URL)
+			m, ok, err := parse(req.URL)
+			if err != nil {
+				lib_http.SendError(rw, err)
+				return
+			}
 			if !ok {
 				next.ServeHTTP(rw, req)
 				return
 			}
-			repo := m[middleware.RepositorySubexp]
+			repo := m[lib.RepositorySubexp]
 			pn, err := projectNameFromRepo(repo)
 			if err != nil {
-				serror.SendError(rw, errors.BadRequestError(err))
+				lib_http.SendError(rw, errors.BadRequestError(err))
 				return
 			}
 			art := lib.ArtifactInfo{
 				Repository:  repo,
 				ProjectName: pn,
 			}
-			if d, ok := m[middleware.DigestSubexp]; ok {
+			if d, ok := m[lib.DigestSubexp]; ok {
 				art.Digest = d
 			}
-			if ref, ok := m[middleware.ReferenceSubexp]; ok {
+			if ref, ok := m[lib.ReferenceSubexp]; ok {
 				art.Reference = ref
 			}
 			if t, ok := m[tag]; ok {
@@ -80,7 +84,7 @@ func Middleware() func(http.Handler) http.Handler {
 				// it's not clear in OCI spec how to handle invalid from parm
 				bmp, err := projectNameFromRepo(bmr)
 				if err != nil {
-					serror.SendError(rw, errors.BadRequestError(err))
+					lib_http.SendError(rw, errors.BadRequestError(err))
 					return
 				}
 				art.BlobMountDigest = m[blobMountDigest]
@@ -101,7 +105,7 @@ func projectNameFromRepo(repo string) (string, error) {
 	return components[0], nil
 }
 
-func parse(url *url.URL) (map[string]string, bool) {
+func parse(url *url.URL) (map[string]string, bool, error) {
 	path := url.Path
 	query := url.Query()
 	m := make(map[string]string)
@@ -120,10 +124,15 @@ func parse(url *url.URL) (map[string]string, bool) {
 			break
 		}
 	}
-	if digest.DigestRegexp.MatchString(m[middleware.ReferenceSubexp]) {
-		m[middleware.DigestSubexp] = m[middleware.ReferenceSubexp]
-	} else if ref, ok := m[middleware.ReferenceSubexp]; ok {
-		m[tag] = ref
+	// parse reference, for invalid reference format, just give 404.
+	if m[lib.ReferenceSubexp] != "" {
+		if digest.DigestRegexp.MatchString(m[lib.ReferenceSubexp]) {
+			m[lib.DigestSubexp] = m[lib.ReferenceSubexp]
+		} else if reference.TagRegexp.MatchString(m[lib.ReferenceSubexp]) {
+			m[tag] = m[lib.ReferenceSubexp]
+		} else {
+			return m, match, errors.New("invalid reference format").WithCode(errors.NotFoundCode)
+		}
 	}
-	return m, match
+	return m, match, nil
 }

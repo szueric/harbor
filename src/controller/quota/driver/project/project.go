@@ -17,17 +17,16 @@ package project
 import (
 	"context"
 	"fmt"
+	"github.com/goharbor/harbor/src/lib/config"
+	"github.com/goharbor/harbor/src/pkg/config/db"
+	proModels "github.com/goharbor/harbor/src/pkg/project/models"
 	"strconv"
 
 	"github.com/goharbor/harbor/src/common"
-	"github.com/goharbor/harbor/src/common/config"
-	"github.com/goharbor/harbor/src/common/models"
-	"github.com/goharbor/harbor/src/controller/artifact"
 	"github.com/goharbor/harbor/src/controller/blob"
-	"github.com/goharbor/harbor/src/controller/chartmuseum"
 	"github.com/goharbor/harbor/src/lib/log"
 	dr "github.com/goharbor/harbor/src/pkg/quota/driver"
-	"github.com/goharbor/harbor/src/pkg/types"
+	"github.com/goharbor/harbor/src/pkg/quota/types"
 	"github.com/graph-gophers/dataloader"
 )
 
@@ -36,30 +35,28 @@ func init() {
 }
 
 type driver struct {
-	cfg    *config.CfgManager
+	cfg    config.Manager
 	loader *dataloader.Loader
 
-	artifactCtl artifact.Controller
-	blobCtl     blob.Controller
-	chartCtl    chartmuseum.Controller
+	blobCtl blob.Controller
 }
 
 func (d *driver) Enabled(ctx context.Context, key string) (bool, error) {
 	// NOTE: every time load the new configurations from the db to get the latest configurations may have performance problem.
-	if err := d.cfg.Load(); err != nil {
+	if err := d.cfg.Load(ctx); err != nil {
 		return false, err
 	}
-	return d.cfg.Get(common.QuotaPerProjectEnable).GetBool(), nil
+	return d.cfg.Get(ctx, common.QuotaPerProjectEnable).GetBool(), nil
 }
 
 func (d *driver) HardLimits(ctx context.Context) types.ResourceList {
 	// NOTE: every time load the new configurations from the db to get the latest configurations may have performance problem.
-	if err := d.cfg.Load(); err != nil {
+	if err := d.cfg.Load(ctx); err != nil {
 		log.Warningf("load configurations failed, error: %v", err)
 	}
 
 	return types.ResourceList{
-		types.ResourceStorage: d.cfg.Get(common.StoragePerProject).GetInt64(),
+		types.ResourceStorage: d.cfg.Get(ctx, common.StoragePerProject).GetInt64(),
 	}
 }
 
@@ -71,7 +68,7 @@ func (d *driver) Load(ctx context.Context, key string) (dr.RefObject, error) {
 		return nil, err
 	}
 
-	project, ok := result.(*models.Project)
+	project, ok := result.(*proModels.Project)
 	if !ok {
 		return nil, fmt.Errorf("bad result for project: %s", key)
 	}
@@ -122,15 +119,13 @@ func (d *driver) CalculateUsage(ctx context.Context, key string) (types.Resource
 }
 
 func newDriver() dr.Driver {
-	cfg := config.NewDBCfgManager()
+	cfg := db.NewDBCfgManager()
 
-	loader := dataloader.NewBatchedLoader(getProjectsBatchFn)
+	loader := dataloader.NewBatchedLoader(getProjectsBatchFn, dataloader.WithClearCacheOnBatch())
 
 	return &driver{
-		cfg:         cfg,
-		loader:      loader,
-		artifactCtl: artifact.Ctl,
-		blobCtl:     blob.Ctl,
-		chartCtl:    chartmuseum.Ctl,
+		cfg:     cfg,
+		loader:  loader,
+		blobCtl: blob.Ctl,
 	}
 }

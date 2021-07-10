@@ -2,8 +2,11 @@ package gc
 
 import (
 	"fmt"
-	"github.com/garyburd/redigo/redis"
+	"github.com/goharbor/harbor/src/lib"
+	"github.com/goharbor/harbor/src/lib/errors"
 	"github.com/goharbor/harbor/src/pkg/registry"
+	"github.com/gomodule/redigo/redis"
+	"time"
 )
 
 // delKeys ...
@@ -38,8 +41,8 @@ func delKeys(con redis.Conn, pattern string) error {
 	return nil
 }
 
-// deleteManifest calls the registry API to remove manifest
-func deleteManifest(repository, digest string) error {
+// v2DeleteManifest calls the registry API to remove manifest
+func v2DeleteManifest(repository, digest string) error {
 	exist, _, err := registry.Cli.ManifestExist(repository, digest)
 	if err != nil {
 		return err
@@ -49,7 +52,16 @@ func deleteManifest(repository, digest string) error {
 	if !exist {
 		return nil
 	}
-	if err := registry.Cli.DeleteManifest(repository, digest); err != nil {
+	return lib.RetryUntil(func() error {
+		return registry.Cli.DeleteManifest(repository, digest)
+	}, lib.RetryCallback(func(err error, sleep time.Duration) {
+		fmt.Printf("failed to exec DeleteManifest retry after %s : %v\n", sleep, err)
+	}))
+}
+
+// ignoreNotFound ignores the NotFoundErr error
+func ignoreNotFound(f func() error) error {
+	if err := f(); err != nil && !errors.IsNotFoundErr(err) {
 		return err
 	}
 	return nil

@@ -16,9 +16,8 @@ package scan
 
 // Options keep the settings/configurations for scanning.
 type Options struct {
-	// Mark the scan triggered by who.
-	// Identified by the UUID.
-	Requester string
+	ExecutionID int64  // The execution id to scan artifact
+	Tag         string // The tag of the artifact to scan
 }
 
 // Option represents an option item by func template.
@@ -28,10 +27,19 @@ type Options struct {
 // then a non nil error should be returned at then.
 type Option func(options *Options) error
 
-// WithRequester sets the requester option.
-func WithRequester(Requester string) Option {
+// WithExecutionID sets the execution id option.
+func WithExecutionID(executionID int64) Option {
 	return func(options *Options) error {
-		options.Requester = Requester
+		options.ExecutionID = executionID
+
+		return nil
+	}
+}
+
+// WithTag sets the tag option.
+func WithTag(tag string) Option {
+	return func(options *Options) error {
+		options.Tag = tag
 
 		return nil
 	}

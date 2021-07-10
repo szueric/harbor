@@ -16,13 +16,13 @@ package artifactinfo
 
 import (
 	"context"
+	"github.com/goharbor/harbor/src/lib/errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"testing"
 
 	"github.com/goharbor/harbor/src/lib"
-	"github.com/goharbor/harbor/src/server/middleware"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -31,6 +31,7 @@ func TestParseURL(t *testing.T) {
 		input  string
 		expect map[string]string
 		match  bool
+		rc     string
 	}{
 		{
 			input:  "/api/projects",
@@ -45,30 +46,34 @@ func TestParseURL(t *testing.T) {
 		{
 			input: "/v2/no-project-repo/tags/list",
 			expect: map[string]string{
-				middleware.RepositorySubexp: "no-project-repo",
+				lib.RepositorySubexp: "no-project-repo",
 			},
 			match: true,
 		},
 		{
 			input: "/v2/development/golang/manifests/sha256:08e4a417ff4e3913d8723a05cc34055db01c2fd165b588e049c5bad16ce6094f",
 			expect: map[string]string{
-				middleware.RepositorySubexp: "development/golang",
-				middleware.ReferenceSubexp:  "sha256:08e4a417ff4e3913d8723a05cc34055db01c2fd165b588e049c5bad16ce6094f",
-				middleware.DigestSubexp:     "sha256:08e4a417ff4e3913d8723a05cc34055db01c2fd165b588e049c5bad16ce6094f",
+				lib.RepositorySubexp: "development/golang",
+				lib.ReferenceSubexp:  "sha256:08e4a417ff4e3913d8723a05cc34055db01c2fd165b588e049c5bad16ce6094f",
+				lib.DigestSubexp:     "sha256:08e4a417ff4e3913d8723a05cc34055db01c2fd165b588e049c5bad16ce6094f",
 			},
 			match: true,
 		},
 		{
 			input: "/v2/development/golang/manifests/shaxxx:**********************************************************************************************************************************",
 
-			expect: map[string]string{},
-			match:  false,
+			expect: map[string]string{
+				lib.RepositorySubexp: "development/golang",
+				lib.ReferenceSubexp:  "shaxxx:**********************************************************************************************************************************",
+				"tag":                "shaxxx:**********************************************************************************************************************************",
+			},
+			match: true,
 		},
 		{
 			input: "/v2/multi/sector/repository/blobs/sha256:08e4a417ff4e3913d8723a05cc34055db01c2fd165b588e049c5bad16ce6094f",
 			expect: map[string]string{
-				middleware.RepositorySubexp: "multi/sector/repository",
-				middleware.DigestSubexp:     "sha256:08e4a417ff4e3913d8723a05cc34055db01c2fd165b588e049c5bad16ce6094f",
+				lib.RepositorySubexp: "multi/sector/repository",
+				lib.DigestSubexp:     "sha256:08e4a417ff4e3913d8723a05cc34055db01c2fd165b588e049c5bad16ce6094f",
 			},
 			match: true,
 		},
@@ -80,25 +85,31 @@ func TestParseURL(t *testing.T) {
 		{
 			input: "/v2/library/ubuntu/blobs/uploads",
 			expect: map[string]string{
-				middleware.RepositorySubexp: "library/ubuntu",
+				lib.RepositorySubexp: "library/ubuntu",
 			},
 			match: true,
 		},
 		{
 			input: "/v2/library/ubuntu/blobs/uploads/?mount=sha256:08e4a417ff4e3913d8723a05cc34055db01c2fd165b588e049c5bad16ce6094f&from=old/ubuntu",
 			expect: map[string]string{
-				middleware.RepositorySubexp: "library/ubuntu",
-				blobMountDigest:             "sha256:08e4a417ff4e3913d8723a05cc34055db01c2fd165b588e049c5bad16ce6094f",
-				blobMountRepo:               "old/ubuntu",
+				lib.RepositorySubexp: "library/ubuntu",
+				blobMountDigest:      "sha256:08e4a417ff4e3913d8723a05cc34055db01c2fd165b588e049c5bad16ce6094f",
+				blobMountRepo:        "old/ubuntu",
 			},
 			match: true,
 		},
 		{
 			input: "/v2/library/centos/blobs/uploads/u-12345",
 			expect: map[string]string{
-				middleware.RepositorySubexp: "library/centos",
+				lib.RepositorySubexp: "library/centos",
 			},
 			match: true,
+		},
+		{
+			input:  "/v2/library/centos/manifest/.Invalid",
+			expect: map[string]string{},
+			match:  false,
+			rc:     errors.NotFoundCode,
 		},
 	}
 
@@ -107,7 +118,10 @@ func TestParseURL(t *testing.T) {
 		if err != nil {
 			panic(err)
 		}
-		e, m := parse(url)
+		e, m, err := parse(url)
+		if err != nil {
+			assert.True(t, errors.IsErr(err, c.rc))
+		}
 		assert.Equal(t, c.match, m)
 		assert.Equal(t, c.expect, e)
 	}

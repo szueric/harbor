@@ -17,18 +17,18 @@ package quota
 import (
 	"context"
 	"fmt"
+	proModels "github.com/goharbor/harbor/src/pkg/project/models"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
-	"github.com/goharbor/harbor/src/common/models"
 	"github.com/goharbor/harbor/src/testing/controller/project"
 	"github.com/stretchr/testify/mock"
 )
 
 func Test_projectReferenceObject(t *testing.T) {
 	ctl := &project.Controller{}
-	ctl.On("GetByName", mock.AnythingOfType(""), "library").Return(&models.Project{ProjectID: 1}, nil)
+	ctl.On("GetByName", mock.AnythingOfType(""), "library").Return(&proModels.Project{ProjectID: 1}, nil)
 	ctl.On("GetByName", mock.AnythingOfType(""), "demo").Return(nil, fmt.Errorf("not found"))
 
 	originalProjectController := projectController
@@ -58,7 +58,6 @@ func Test_projectReferenceObject(t *testing.T) {
 		{"/api/v2.0/projects/library/repositories", args{req("/api/v2.0/projects/library/repositories")}, "project", "1", false},
 		{"/api/v2.0/projects/demo", args{req("/api/v2.0/projects/demo")}, "", "", true},
 		{"/api/v2.0/library", args{req("/api/v2.0/library")}, "", "", true},
-		{"/api/chartrepo/library/charts", args{req("/api/chartrepo/library/charts")}, "project", "1", false},
 		{"/v2/library/photon/manifests/2.0", args{req("/v2/library/photon/manifests/2.0")}, "project", "1", false},
 		{"/v2", args{req("/v2")}, "", "", true},
 	}

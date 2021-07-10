@@ -21,25 +21,8 @@ import (
 func init() {
 	orm.RegisterModel(
 		new(User),
-		new(Project),
 		new(Role),
-		new(RepoRecord),
-		new(ClairVulnTimestamp),
-		new(ProjectMetadata),
-		new(ConfigEntry),
-		new(Label),
 		new(ResourceLabel),
-		new(UserGroup),
-		new(AdminJob),
-		new(JobLog),
 		new(OIDCUser),
-		new(NotificationPolicy),
-		new(NotificationJob),
-		new(Blob),
-		new(ProjectBlob),
-		new(ArtifactAndBlob),
-		new(CVEWhitelist),
-		new(Quota),
-		new(QuotaUsage),
 	)
 }
